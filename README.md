@@ -153,7 +153,8 @@ Alle kommandoer skrives direkte i input-feltet.
 | `/wiki gem <titel>` | Gem seneste `/forresten`-svar i wikien |
 | `/hook` | Vis tilgængelige hooks |
 | `/hook <navn>` | Kør en hook — output vises i tool-panelet |
-| `/dep <modul>` | Sikkerhedsscore for en Go-afhængighed |
+| `/dep <modul>` | Sikkerhedsscore for én Go-afhængighed |
+| `/deps` | Scan alle afhængigheder i projektet + ekte-harness |
 | `/forresten <besked>` | Side-chat med en isoleret subagent (husker sin egen historik) |
 | `/clear` | Ryd samtalens historik |
 | `/resume` | Vis tidligere gemte sessioner |
@@ -169,9 +170,9 @@ Alle kommandoer skrives direkte i input-feltet.
 | `↑` / `↓` | Naviger i inputhistorik |
 | `PgUp` / `PgDn` | Scroll i samtalevisning |
 
-### `/dep` — sikkerhedsscore
+### `/dep` og `/deps` — sikkerhedsscore
 
-Tjekker en Go-afhængighed mod Go module proxy og OSV.dev (CVE-database):
+`/dep <modul>` tjekker ét modul mod Go module proxy og OSV.dev (CVE-database):
 
 ```
 /dep github.com/gin-gonic/gin
@@ -184,6 +185,30 @@ Score:        ★★★★★
 Kendte CVE:   0
 
 ✓ Trygt at bruge
+```
+
+`/deps` scanner alle afhængigheder på én gang — både projektets `go.mod`
+og ekte-harness'ets egne moduler. Op til 8 tjek kører parallelt.
+
+```
+Projekt (3 moduler)
+
+✓ gin-gonic/gin v1.10.0
+✓ gorilla/mux v1.8.1
+⚠ some/old-lib v1.0.0 [1 CVE]
+  · GO-2023-1234: Remote code execution...
+
+3 rene · 0 sårbar · 0 fejl
+
+────────────────────────
+
+ekte-harness (25 moduler)
+
+✓ charmbracelet/bubbletea v1.3.10
+✓ charmbracelet/lipgloss v1.1.0
+...
+
+25 rene · 0 sårbar · 0 fejl
 ```
 
 ---
