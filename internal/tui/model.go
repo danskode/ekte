@@ -56,11 +56,11 @@ type Model struct {
 
 func New(p provider.Provider) Model {
 	ta := textarea.New()
-	ta.Placeholder = "Skriv her... (Enter sender, Shift+Enter = ny linje, /hjælp for kommandoer)"
+	ta.Placeholder = "Skriv her... (Enter sender, Shift+Enter / Ctrl+J = ny linje, /hjælp)"
 	ta.Focus()
 	ta.SetHeight(3)
 	ta.ShowLineNumbers = false
-	ta.KeyMap.InsertNewline.SetKeys("shift+enter")
+	ta.KeyMap.InsertNewline.SetEnabled(false) // håndteres eksplicit i Update
 	ta.CharLimit = 0
 
 	return Model{

@@ -30,9 +30,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if msg.String() == "shift+enter" {
+			m.input.InsertString("\n")
+			return m, nil
+		}
+
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			return m, tea.Quit
+
+		case tea.KeyCtrlJ:
+			// Ctrl+J = universelt alternativ til Shift+Enter (ny linje)
+			m.input.InsertString("\n")
+			return m, nil
 
 		case tea.KeyUp:
 			if !m.input.Focused() {
