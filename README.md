@@ -154,7 +154,7 @@ Alle kommandoer skrives direkte i input-feltet.
 | `/hook` | Vis tilgængelige hooks |
 | `/hook <navn>` | Kør en hook — output vises i tool-panelet |
 | `/dep <modul>` | Sikkerhedsscore for én Go-afhængighed |
-| `/deps` | Scan alle afhængigheder i projektet + ekte-harness |
+| `/sec-check` | Scan alle afhængigheder i projektet + ekte-harness |
 | `/forresten <besked>` | Side-chat med en isoleret subagent (husker sin egen historik) |
 | `/clear` | Ryd samtalens historik |
 | `/resume` | Vis tidligere gemte sessioner |
@@ -170,7 +170,7 @@ Alle kommandoer skrives direkte i input-feltet.
 | `↑` / `↓` | Naviger i inputhistorik |
 | `PgUp` / `PgDn` | Scroll i samtalevisning |
 
-### `/dep` og `/deps` — sikkerhedsscore
+### `/dep` og `/sec-check` — sikkerhedsscore
 
 `/dep <modul>` tjekker ét modul mod Go module proxy og OSV.dev (CVE-database):
 
@@ -187,7 +187,7 @@ Kendte CVE:   0
 ✓ Trygt at bruge
 ```
 
-`/deps` scanner alle afhængigheder på én gang — både projektets `go.mod`
+`/sec-check` scanner alle afhængigheder på én gang — både projektets `go.mod`
 og ekte-harness'ets egne moduler. Op til 8 tjek kører parallelt.
 
 ```
