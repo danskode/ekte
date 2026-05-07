@@ -134,6 +134,45 @@ func (m *Model) handleSlash(input string) slashResult {
 		m.tokenCount = 0
 		m.conversation.SetContent("")
 		return slashResult{handled: true}
+
+	case "/exit":
+		if m.sessionDir == "" || len(m.messages) == 0 {
+			return slashResult{handled: true, cmd: tea.Quit}
+		}
+		return slashResult{
+			handled: true,
+			output:  styleSystem.Render("Gemmer session..."),
+			cmd:     sessionSaveCmd(m.sessionDir, m.messages),
+		}
+
+	case "/resume":
+		if m.sessionDir == "" {
+			return slashResult{handled: true, output: "Ingen session-mappe konfigureret."}
+		}
+		if arg != "" {
+			// indlæs session nr. <arg>
+			idx := 0
+			fmt.Sscanf(arg, "%d", &idx)
+			if idx < 1 || idx > len(m.sessions) {
+				return slashResult{handled: true, output: fmt.Sprintf("Ugyldigt nummer — vælg 1-%d.", len(m.sessions))}
+			}
+			s := m.sessions[idx-1]
+			m.messages = s.Messages
+			m.tokenCount = 0
+			for _, msg := range m.messages {
+				m.tokenCount += len(msg.Content) / 4
+			}
+			m.conversation.SetContent(m.conversationContent())
+			m.conversation.GotoBottom()
+			return slashResult{
+				handled: true,
+				output:  styleSuccess.Render(fmt.Sprintf("✓ Session indlæst: %s", s.Title)),
+			}
+		}
+		return slashResult{
+			handled: true,
+			cmd:     sessionListCmd(m.sessionDir),
+		}
 	}
 
 	return slashResult{handled: true, output: "Ukendt kommando: " + command + " (prøv /hjælp)"}
@@ -165,6 +204,8 @@ func helpText() string {
 		{"/hook <navn>", "kør hook manuelt"},
 		{"/forresten <besked>", "side-chat med subagent (husker historik)"},
 		{"/clear", "ryd samtalen"},
+		{"/exit", "gem session og afslut"},
+		{"/resume [nummer]", "vis eller indlæs tidligere sessioner"},
 		{"/hjælp", "vis denne hjælp"},
 	}
 	var sb strings.Builder

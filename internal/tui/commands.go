@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/danskode/ekte/internal/git"
 	"github.com/danskode/ekte/internal/provider"
+	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/wiki"
 )
 
@@ -101,6 +102,30 @@ func worktreeRemoveCmd(repoRoot, name string) tea.Cmd {
 	return func() tea.Msg {
 		err := git.Remove(repoRoot, name)
 		return msgWorktreeRemoved{name: name, err: err}
+	}
+}
+
+type msgSessionSaved struct {
+	s   *session.Session
+	err error
+}
+
+type msgSessionList struct {
+	sessions []session.Session
+	err      error
+}
+
+func sessionSaveCmd(dir string, messages []provider.Message) tea.Cmd {
+	return func() tea.Msg {
+		s, err := session.Save(dir, messages)
+		return msgSessionSaved{s: s, err: err}
+	}
+}
+
+func sessionListCmd(dir string) tea.Cmd {
+	return func() tea.Msg {
+		sessions, err := session.LoadAll(dir)
+		return msgSessionList{sessions: sessions, err: err}
 	}
 }
 

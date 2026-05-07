@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/danskode/ekte/internal/provider"
+	"github.com/danskode/ekte/internal/session"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -165,6 +166,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			content = styleSuccess.Render("✓ Merget og ryddet op: " + msg.name)
 		}
 		m.appendSystem(content)
+
+	case msgSessionSaved:
+		if msg.err != nil {
+			m.appendSystem(styleError.Render("Gem fejlede: " + msg.err.Error()))
+		} else {
+			m.appendSystem(styleSuccess.Render("✓ Session gemt: " + msg.s.Title))
+			return m, tea.Quit
+		}
+
+	case msgSessionList:
+		if msg.err != nil {
+			m.appendSystem(styleError.Render("Fejl: " + msg.err.Error()))
+		} else {
+			m.sessions = msg.sessions
+			m.appendSystem(session.RenderList(msg.sessions))
+		}
 
 	case msgWikiResult:
 		if msg.err != nil {

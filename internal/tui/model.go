@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/danskode/ekte/internal/provider"
+	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/wiki"
 )
@@ -45,7 +46,9 @@ type Model struct {
 	repoRoot string
 	wiki     *wiki.Wiki
 
-	pendingWikiSave string // forresten-svar afventer gem-bekræftelse
+	pendingWikiSave string
+	sessionDir      string
+	sessions        []session.Session
 
 	ready bool
 	err   error
@@ -89,6 +92,10 @@ func (m *Model) SetRepoRoot(root string) {
 
 func (m *Model) SetWiki(w *wiki.Wiki) {
 	m.wiki = w
+}
+
+func (m *Model) SetSessionDir(dir string) {
+	m.sessionDir = dir
 }
 
 func (m *Model) ClearActiveSkill() {
