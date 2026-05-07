@@ -17,6 +17,15 @@ vendor/
 # Worktrees
 .ekte/worktrees/
 
+# Sessions (personlige — ikke deles)
+.ekte/sessions/
+
+# Diagnostik
+cmd/keytest/
+
+# Projektfiler
+ekte-session-prompt.md
+
 # OS
 .DS_Store
 Thumbs.db
