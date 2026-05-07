@@ -157,7 +157,7 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 		}
 		return a.handleDep(ctx, arg)
 
-	case "/deps":
+	case "/sec-check":
 		return a.handleDeps(ctx)
 
 	case "/exit":
@@ -520,7 +520,7 @@ func helpText() string {
 		{"/wiki \"spørgsmål\"", "søg i din personlige wiki"},
 		{"/hook [navn]", "vis hooks — angiv navn for at køre"},
 		{"/dep <modul>", "sikkerhedsscore for én Go-afhængighed"},
-		{"/deps", "scan alle afhængigheder + ekte-harness"},
+		{"/sec-check", "scan alle afhængigheder + ekte-harness"},
 		{"/forresten <besked>", "side-chat med subagent (husker historik)"},
 		{"/clear", "ryd samtalen"},
 		{"/exit", "gem session og afslut"},
