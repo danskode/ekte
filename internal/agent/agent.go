@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/danskode/ekte/internal/git"
@@ -35,6 +38,8 @@ type Config struct {
 	RepoRoot   string
 	SessionDir string
 	Skills     []skill.Skill
+	Whitelist  provider.WhitelistConfig
+	Hooks      map[string]string
 }
 
 type Agent struct {
@@ -133,13 +138,16 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 		return a.handleForresten(ctx, arg)
 
 	case "/compress":
-		return []Event{{Type: EventSystem, Content: "[kontekst-komprimering — ikke implementeret endnu]"}}
+		return a.handleCompress(ctx)
 
 	case "/hook":
 		if arg == "" {
-			return []Event{{Type: EventSystem, Content: "Brug: /hook <navn>"}}
+			return a.handleHookList()
 		}
-		return []Event{{Type: EventSystem, Content: "[kører hook: " + arg + " — ikke implementeret endnu]"}}
+		if !a.cfg.Whitelist.HookRun {
+			return []Event{{Type: EventSystem, Content: denyMsg("hook_run")}}
+		}
+		return a.handleHook(arg)
 
 	case "/exit":
 		return a.handleExit()
@@ -177,6 +185,9 @@ func (a *Agent) handleSpec(ctx context.Context, arg string) []Event {
 			return []Event{{Type: EventError, Content: err.Error()}}
 		}
 		return []Event{{Type: EventSystem, Content: renderWorktreeList(wts)}}
+	}
+	if !a.cfg.Whitelist.GitWorktree {
+		return []Event{{Type: EventSystem, Content: denyMsg("git_worktree")}}
 	}
 	subparts := strings.SplitN(arg, " ", 2)
 	switch subparts[0] {
@@ -217,6 +228,9 @@ func (a *Agent) handleWiki(ctx context.Context, arg string) []Event {
 	}
 	subparts := strings.SplitN(arg, " ", 2)
 	if subparts[0] == "gem" {
+		if !a.cfg.Whitelist.WikiWrite {
+			return []Event{{Type: EventSystem, Content: denyMsg("wiki_write")}}
+		}
 		if a.pendingWikiSave == "" {
 			return []Event{{Type: EventSystem, Content: "Intet at gemme endnu — brug /forresten først."}}
 		}
@@ -350,6 +364,98 @@ func renderWorktreeList(wts []git.Worktree) string {
 		sb.WriteString(fmt.Sprintf("  %s\n  branch: %s\n  sti: %s\n\n", wt.Name, wt.Branch, wt.Path))
 	}
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+func (a *Agent) handleCompress(ctx context.Context) []Event {
+	if a.cfg.Provider == nil {
+		return []Event{{Type: EventError, Content: "Ingen LLM konfigureret."}}
+	}
+	if len(a.messages) < 4 {
+		return []Event{{Type: EventSystem, Content: "Samtalen er for kort til at komprimere."}}
+	}
+
+	compressPrompt := "Lav et kort, præcist resumé af denne samtale på dansk. " +
+		"Bevar alle vigtige beslutninger, kodedetaljer og kontekst. " +
+		"Resuméet bruges som erstatning for samtalehistorikken, så ingenting vigtigt må gå tabt."
+
+	msgs := append(a.messages, provider.Message{Role: "user", Content: compressPrompt})
+	resp, err := a.cfg.Provider.Chat(ctx, msgs)
+	if err != nil {
+		return []Event{{Type: EventError, Content: "Komprimering fejlede: " + err.Error()}}
+	}
+
+	before := a.tokenCount
+	a.messages = []provider.Message{
+		{Role: "system", Content: "Resumé af tidligere samtale:\n\n" + resp.Content},
+	}
+	a.tokenCount = estimateTokens(a.messages)
+
+	return []Event{
+		{Type: EventSystem, Content: fmt.Sprintf(
+			"✓ Kontekst komprimeret: %d → %d tokens", before, a.tokenCount,
+		)},
+		{Type: EventTokenCount, Tokens: a.tokenCount},
+	}
+}
+
+func (a *Agent) handleHookList() []Event {
+	if len(a.cfg.Hooks) == 0 {
+		return []Event{{Type: EventSystem, Content: "Ingen hooks konfigureret.\n\nTilføj til .ekte/config.yaml:\n\n  hooks:\n    test: go test ./...\n    lint: golangci-lint run"}}
+	}
+	var sb strings.Builder
+	sb.WriteString("Tilgængelige hooks:\n\n")
+	for name, cmd := range a.cfg.Hooks {
+		sb.WriteString(fmt.Sprintf("  /hook %-16s → %s\n", name, cmd))
+	}
+	return []Event{{Type: EventSystem, Content: strings.TrimRight(sb.String(), "\n")}}
+}
+
+func (a *Agent) handleHook(name string) []Event {
+	cmd, ok := a.cfg.Hooks[name]
+	if !ok {
+		// fallback: .ekte/hooks/<name> som script
+		script := ".ekte/hooks/" + name
+		if _, err := os.Stat(script); err != nil {
+			return []Event{{Type: EventSystem, Content: fmt.Sprintf("Hook ikke fundet: %s\n\nKør '/hook' for at se tilgængelige hooks.", name)}}
+		}
+		cmd = script
+	}
+
+	var buf bytes.Buffer
+	c := exec.Command("sh", "-c", cmd)
+	c.Stdout = &buf
+	c.Stderr = &buf
+
+	runErr := c.Run()
+
+	output := strings.TrimRight(buf.String(), "\n")
+	if output == "" {
+		output = "(ingen output)"
+	}
+
+	header := fmt.Sprintf("hook: %s\n$ %s\n\n", name, cmd)
+	toolContent := header + output
+
+	var status string
+	if runErr != nil {
+		status = fmt.Sprintf("✗ Hook fejlede: %s (%v)", name, runErr)
+	} else {
+		status = fmt.Sprintf("✓ Hook gennemført: %s", name)
+	}
+
+	return []Event{
+		{Type: EventToolOutput, Content: toolContent},
+		{Type: EventSystem, Content: status},
+	}
+}
+
+func denyMsg(key string) string {
+	return fmt.Sprintf(
+		"⛔ Operation ikke tilladt: %s\n\n"+
+			"Tilføj dette til .ekte/config.yaml for at tillade:\n\n"+
+			"  whitelist:\n    %s: true",
+		key, key,
+	)
 }
 
 func helpText() string {
