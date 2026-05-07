@@ -46,9 +46,10 @@ type Model struct {
 	repoRoot string
 	wiki     *wiki.Wiki
 
-	pendingWikiSave string
-	sessionDir      string
-	sessions        []session.Session
+	pendingWikiSave    string
+	sessionDir         string
+	sessions           []session.Session
+	pendingShiftEnter  bool // \x1bOM tracker: alt+O set, næste M = newline
 
 	ready bool
 	err   error

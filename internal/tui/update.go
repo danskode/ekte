@@ -30,9 +30,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// shift+enter på kitty-protokol terminaler
 		if msg.String() == "shift+enter" {
 			m.input.InsertString("\n")
 			return m, nil
+		}
+		// \x1bOM: terminaler der sender Shift+Enter som alt+O efterfulgt af M
+		if msg.String() == "alt+O" {
+			m.pendingShiftEnter = true
+			return m, nil
+		}
+		if m.pendingShiftEnter {
+			m.pendingShiftEnter = false
+			if len(msg.Runes) == 1 && msg.Runes[0] == 'M' {
+				m.input.InsertString("\n")
+				return m, nil
+			}
+			// ikke M alligevel — lad begge tegn igennem som tekst
+			m.input.InsertString("O")
 		}
 
 		switch msg.Type {
