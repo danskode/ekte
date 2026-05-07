@@ -1,0 +1,22 @@
+# Build output
+ekte
+dist/
+
+# Go
+*.test
+*.out
+vendor/
+
+# Secrets
+.env
+.ekte/config.yaml
+
+# Wiki (global wiki er ikke en del af projekt-repo)
+.ekte/wiki/
+
+# Worktrees
+.ekte/worktrees/
+
+# OS
+.DS_Store
+Thumbs.db
