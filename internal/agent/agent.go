@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/danskode/ekte/internal/dep"
 	"github.com/danskode/ekte/internal/git"
 	"github.com/danskode/ekte/internal/provider"
 	"github.com/danskode/ekte/internal/session"
@@ -148,6 +149,12 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 			return []Event{{Type: EventSystem, Content: denyMsg("hook_run")}}
 		}
 		return a.handleHook(arg)
+
+	case "/dep":
+		if arg == "" {
+			return []Event{{Type: EventSystem, Content: "Brug: /dep <go-modul-sti>  — fx /dep github.com/some/pkg"}}
+		}
+		return a.handleDep(ctx, arg)
 
 	case "/exit":
 		return a.handleExit()
@@ -366,6 +373,11 @@ func renderWorktreeList(wts []git.Worktree) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
+func (a *Agent) handleDep(ctx context.Context, module string) []Event {
+	sc := dep.Check(ctx, module)
+	return []Event{{Type: EventToolOutput, Content: sc.Render()}}
+}
+
 func (a *Agent) handleCompress(ctx context.Context) []Event {
 	if a.cfg.Provider == nil {
 		return []Event{{Type: EventError, Content: "Ingen LLM konfigureret."}}
@@ -464,7 +476,8 @@ func helpText() string {
 		{"/spec <navn>", "opret spec + git worktree"},
 		{"/compress", "komprimer kontekstvindue"},
 		{"/wiki \"spørgsmål\"", "søg i din personlige wiki"},
-		{"/hook <navn>", "kør hook manuelt"},
+		{"/hook [navn]", "vis hooks — angiv navn for at køre"},
+		{"/dep <modul>", "sikkerhedsscore for Go-afhængighed"},
 		{"/forresten <besked>", "side-chat med subagent (husker historik)"},
 		{"/clear", "ryd samtalen"},
 		{"/exit", "gem session og afslut"},
