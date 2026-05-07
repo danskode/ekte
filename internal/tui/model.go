@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -39,6 +40,7 @@ type Model struct {
 	streamCh  <-chan agent.Event
 
 	tokenCount int
+	spinner    spinner.Model
 	agent      *agent.Agent
 	ready      bool
 }
@@ -52,9 +54,14 @@ func New(a *agent.Agent) Model {
 	ta.KeyMap.InsertNewline.SetEnabled(false)
 	ta.CharLimit = 0
 
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
+
 	return Model{
 		agent:      a,
 		input:      ta,
+		spinner:    sp,
 		historyIdx: -1,
 	}
 }
@@ -129,9 +136,14 @@ func (m Model) statusBar() string {
 		skillIndicator = "  " + styleSlashCmd.Render("skill:"+m.agent.ActiveSkill().Name)
 	}
 
-	hint := styleSystem.Render("/hjælp")
+	var right string
+	if m.streaming {
+		right = styleStatusBar.Render(m.spinner.View() + " arbejder...")
+	} else {
+		right = styleStatusBar.Render(styleSystem.Render("/hjælp"))
+	}
+
 	left := styleStatusBar.Render(ctxStyled + skillIndicator)
-	right := styleStatusBar.Render(hint)
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0

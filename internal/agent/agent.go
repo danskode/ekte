@@ -14,6 +14,7 @@ import (
 	"github.com/danskode/ekte/internal/provider"
 	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
+	"github.com/danskode/ekte/internal/tools"
 	"github.com/danskode/ekte/internal/wiki"
 )
 
@@ -142,28 +143,80 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 	msgs := a.messagesWithSkill()
 	a.clearSkill()
 
-	tokenCh, err := a.cfg.Provider.Stream(ctx, msgs)
-	if err != nil {
-		ch <- Event{Type: EventError, Content: "LLM-fejl: " + err.Error()}
+	toolDefs := tools.Definitions(a.cfg.Whitelist.FileRead, a.cfg.Whitelist.FileWrite)
+	workdir := a.cfg.RepoRoot
+	if workdir == "" {
+		workdir, _ = os.Getwd()
+	}
+
+	// Tool-loop: kør til LLM stopper med at kalde tools
+	for {
+		if len(toolDefs) > 0 {
+			// Brug ChatWithTools (ikke streaming) når tools er aktive —
+			// streaming og tool calls kombineres ikke i denne version
+			resp, err := a.cfg.Provider.ChatWithTools(ctx, msgs, toolDefs)
+			if err != nil {
+				ch <- Event{Type: EventError, Content: "LLM-fejl: " + err.Error()}
+				return
+			}
+
+			if len(resp.ToolCalls) == 0 {
+				// Intet tool call — vis svar og afslut
+				a.messages = append(a.messages, provider.Message{Role: "assistant", Content: resp.Content})
+				a.tokenCount = estimateTokens(a.messages)
+				ch <- Event{Type: EventStreamDone, Content: resp.Content}
+				ch <- Event{Type: EventTokenCount, Tokens: a.tokenCount}
+				return
+			}
+
+			// Eksekver tool calls og send output til tool-panel
+			assistantMsg := provider.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls}
+			msgs = append(msgs, assistantMsg)
+
+			var toolLog strings.Builder
+			for _, tc := range resp.ToolCalls {
+				result, err := tools.Execute(tc, workdir, a.cfg.Whitelist.FileRead, a.cfg.Whitelist.FileWrite)
+				if err != nil {
+					result = "Fejl: " + err.Error()
+				}
+				toolLog.WriteString(fmt.Sprintf("tool: %s\n%s\n\n", tc.Name, result))
+				msgs = append(msgs, provider.Message{
+					Role:       "tool",
+					Content:    result,
+					ToolCallID: tc.ID,
+				})
+			}
+			ch <- Event{Type: EventToolOutput, Content: strings.TrimRight(toolLog.String(), "\n")}
+
+			// Fortsæt loop — LLM skal svare på tool-resultater
+			continue
+		}
+
+		// Ingen tools tilgængelige — stream direkte
+		tokenCh, err := a.cfg.Provider.Stream(ctx, msgs)
+		if err != nil {
+			ch <- Event{Type: EventError, Content: "LLM-fejl: " + err.Error()}
+			return
+		}
+
+		var sb strings.Builder
+		for token := range tokenCh {
+			sb.WriteString(token)
+			ch <- Event{Type: EventStreamToken, Content: token}
+		}
+
+		full := sb.String()
+		if full == "" {
+			ch <- Event{Type: EventError, Content: "Tom respons fra LLM."}
+			return
+		}
+
+		a.messages = append(a.messages, provider.Message{Role: "assistant", Content: full})
+		a.tokenCount = estimateTokens(a.messages)
+		ch <- Event{Type: EventStreamDone, Content: full}
+		ch <- Event{Type: EventTokenCount, Tokens: a.tokenCount}
 		return
 	}
-
-	var sb strings.Builder
-	for token := range tokenCh {
-		sb.WriteString(token)
-		ch <- Event{Type: EventStreamToken, Content: token}
-	}
-
-	full := sb.String()
-	if full == "" {
-		ch <- Event{Type: EventError, Content: "Tom respons fra LLM."}
-		return
-	}
-
-	a.messages = append(a.messages, provider.Message{Role: "assistant", Content: full})
-	a.tokenCount = estimateTokens(a.messages)
-	ch <- Event{Type: EventStreamDone, Content: full}
-	ch <- Event{Type: EventTokenCount, Tokens: a.tokenCount}
 }
 
 func (a *Agent) handleSlash(ctx context.Context, input string) []Event {

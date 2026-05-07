@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/danskode/ekte/internal/agent"
@@ -132,7 +133,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = true
 		m.streamBuf = ""
 		m.streamCh = msg.ch
-		return m, readStreamCmd(msg.ch)
+		return m, tea.Batch(readStreamCmd(msg.ch), m.spinner.Tick)
+
+	case spinner.TickMsg:
+		if m.streaming {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			cmds = append(cmds, cmd)
+		}
 
 	case msgStreamEnd:
 		m.streaming = false

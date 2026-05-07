@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/sashabaranov/go-openai"
@@ -26,9 +27,23 @@ func NewOpenAIProvider(cfg *Config) *OpenAIProvider {
 func (p *OpenAIProvider) Name() string { return "openai" }
 
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message) (*Response, error) {
+	return p.ChatWithTools(ctx, messages, nil)
+}
+
+func (p *OpenAIProvider) ChatWithTools(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error) {
 	req := openai.ChatCompletionRequest{
 		Model:    p.model,
 		Messages: toOpenAIMessages(messages),
+	}
+	for _, t := range tools {
+		req.Tools = append(req.Tools, openai.Tool{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.Parameters,
+			},
+		})
 	}
 	resp, err := p.client.CreateChatCompletion(ctx, req)
 	if err != nil {
@@ -38,10 +53,22 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message) (*Respons
 		return nil, fmt.Errorf("openai: no choices returned")
 	}
 	choice := resp.Choices[0]
-	return &Response{
+	out := &Response{
 		Content:    choice.Message.Content,
 		StopReason: string(choice.FinishReason),
-	}, nil
+	}
+	for _, tc := range choice.Message.ToolCalls {
+		var raw json.RawMessage
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &raw); err != nil {
+			raw = json.RawMessage(`{}`)
+		}
+		out.ToolCalls = append(out.ToolCalls, ToolCall{
+			ID:    tc.ID,
+			Name:  tc.Function.Name,
+			Input: raw,
+		})
+	}
+	return out, nil
 }
 
 func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message) (<-chan string, error) {
@@ -72,12 +99,24 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message) (<-chan
 }
 
 func toOpenAIMessages(msgs []Message) []openai.ChatCompletionMessage {
-	out := make([]openai.ChatCompletionMessage, len(msgs))
-	for i, m := range msgs {
-		out[i] = openai.ChatCompletionMessage{
-			Role:    m.Role,
-			Content: m.Content,
+	out := make([]openai.ChatCompletionMessage, 0, len(msgs))
+	for _, m := range msgs {
+		msg := openai.ChatCompletionMessage{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCallID: m.ToolCallID,
 		}
+		for _, tc := range m.ToolCalls {
+			msg.ToolCalls = append(msg.ToolCalls, openai.ToolCall{
+				ID:   tc.ID,
+				Type: openai.ToolTypeFunction,
+				Function: openai.FunctionCall{
+					Name:      tc.Name,
+					Arguments: string(tc.Input),
+				},
+			})
+		}
+		out = append(out, msg)
 	}
 	return out
 }
