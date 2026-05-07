@@ -20,12 +20,14 @@ import (
 type EventType int
 
 const (
-	EventAssistant  EventType = iota // svar fra LLM
+	EventAssistant  EventType = iota // svar fra LLM (ikke-streaming)
 	EventSystem                      // info/status besked
 	EventError                       // fejlbesked
 	EventQuit                        // afslut applikation
 	EventTokenCount                  // opdateret token-estimat
 	EventToolOutput                  // output til tool-panel
+	EventStreamToken                 // streaming: et token fra LLM
+	EventStreamDone                  // streaming: fuldt svar klar (Content = hele teksten)
 )
 
 type Event struct {
@@ -105,6 +107,63 @@ func (a *Agent) handleChat(ctx context.Context, input string) []Event {
 		{Type: EventAssistant, Content: resp.Content},
 		{Type: EventTokenCount, Tokens: a.tokenCount},
 	}
+}
+
+// ProcessStream kører input og sender events løbende via en kanal.
+// Brug denne i stedet for Process til streaming-chat i TUI.
+// Slash commands sendes stadig som en batch og kanalen lukkes derefter.
+func (a *Agent) ProcessStream(ctx context.Context, input string) <-chan Event {
+	ch := make(chan Event, 64)
+	go func() {
+		defer close(ch)
+		input = strings.TrimSpace(input)
+		if input == "" {
+			return
+		}
+		if strings.HasPrefix(input, "/") {
+			for _, ev := range a.handleSlash(ctx, input) {
+				ch <- ev
+			}
+			return
+		}
+		a.streamChat(ctx, input, ch)
+	}()
+	return ch
+}
+
+func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
+	a.messages = append(a.messages, provider.Message{Role: "user", Content: input})
+
+	if a.cfg.Provider == nil {
+		ch <- Event{Type: EventError, Content: "Ingen LLM konfigureret. Sæt din API-nøgle og genstart ekte."}
+		return
+	}
+
+	msgs := a.messagesWithSkill()
+	a.clearSkill()
+
+	tokenCh, err := a.cfg.Provider.Stream(ctx, msgs)
+	if err != nil {
+		ch <- Event{Type: EventError, Content: "LLM-fejl: " + err.Error()}
+		return
+	}
+
+	var sb strings.Builder
+	for token := range tokenCh {
+		sb.WriteString(token)
+		ch <- Event{Type: EventStreamToken, Content: token}
+	}
+
+	full := sb.String()
+	if full == "" {
+		ch <- Event{Type: EventError, Content: "Tom respons fra LLM."}
+		return
+	}
+
+	a.messages = append(a.messages, provider.Message{Role: "assistant", Content: full})
+	a.tokenCount = estimateTokens(a.messages)
+	ch <- Event{Type: EventStreamDone, Content: full}
+	ch <- Event{Type: EventTokenCount, Tokens: a.tokenCount}
 }
 
 func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
