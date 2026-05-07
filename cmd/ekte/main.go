@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/danskode/ekte/internal/git"
+	"github.com/danskode/ekte/internal/onboarding"
 	"github.com/danskode/ekte/internal/provider"
 	"github.com/danskode/ekte/internal/tui"
 	"github.com/danskode/ekte/internal/wiki"
@@ -22,6 +24,20 @@ func main() {
 }
 
 func runTUI() {
+	cwd, _ := os.Getwd()
+
+	// onboarding ved første kørsel
+	if onboarding.IsFirstRun(cwd) {
+		ok, err := onboarding.Run(cwd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "onboarding fejl: %v\n", err)
+			os.Exit(1)
+		}
+		if !ok {
+			os.Exit(0)
+		}
+	}
+
 	configPath := filepath.Join(".ekte", "config.yaml")
 	skillsDir := filepath.Join(".ekte", "skills")
 
@@ -46,13 +62,17 @@ func runTUI() {
 
 	m := tui.New(p)
 
+	// load ekte.md som system-kontekst
+	if context := loadEkteMd(cwd); context != "" {
+		m.SetProjectContext(context)
+	}
+
 	if errs := m.LoadSkills(skillsDir); len(errs) > 0 {
 		for _, e := range errs {
 			fmt.Fprintf(os.Stderr, "skill advarsel: %v\n", e)
 		}
 	}
 
-	cwd, _ := os.Getwd()
 	if root, err := git.RepoRoot(cwd); err == nil {
 		m.SetRepoRoot(root)
 	}
@@ -70,6 +90,14 @@ func runTUI() {
 	}
 }
 
+func loadEkteMd(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "ekte.md"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
 func runInit() {
 	configPath := filepath.Join(".ekte", "config.yaml")
 
@@ -79,19 +107,17 @@ func runInit() {
 		os.Exit(1)
 	}
 
-	// læs eksisterende config eller opret ny
 	type fullConfig struct {
-		Provider string          `yaml:"provider"`
-		Model    string          `yaml:"model"`
-		BaseURL  string          `yaml:"base_url,omitempty"`
-		APIKey   string          `yaml:"api_key,omitempty"`
-		Wiki     *wiki.Config    `yaml:"wiki,omitempty"`
+		Provider string       `yaml:"provider"`
+		Model    string       `yaml:"model"`
+		BaseURL  string       `yaml:"base_url,omitempty"`
+		APIKey   string       `yaml:"api_key,omitempty"`
+		Wiki     *wiki.Config `yaml:"wiki,omitempty"`
 	}
 
 	cfg := fullConfig{
 		Provider: "openai",
-		Model:    "llama3.2",
-		BaseURL:  "http://localhost:11434/v1",
+		Model:    "gpt-4o",
 		Wiki:     wikiCfg,
 	}
 

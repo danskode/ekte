@@ -95,6 +95,12 @@ func (m *Model) SetWiki(w *wiki.Wiki) {
 	m.wiki = w
 }
 
+func (m *Model) SetProjectContext(context string) {
+	m.messages = append([]provider.Message{
+		{Role: "system", Content: "Projektkontekst (ekte.md):\n\n" + context},
+	}, m.messages...)
+}
+
 func (m *Model) SetSessionDir(dir string) {
 	m.sessionDir = dir
 }
