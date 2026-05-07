@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/danskode/ekte/internal/dep"
@@ -155,6 +156,9 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 			return []Event{{Type: EventSystem, Content: "Brug: /dep <go-modul-sti>  — fx /dep github.com/some/pkg"}}
 		}
 		return a.handleDep(ctx, arg)
+
+	case "/deps":
+		return a.handleDeps(ctx)
 
 	case "/exit":
 		return a.handleExit()
@@ -378,6 +382,44 @@ func (a *Agent) handleDep(ctx context.Context, module string) []Event {
 	return []Event{{Type: EventToolOutput, Content: sc.Render()}}
 }
 
+func (a *Agent) handleDeps(ctx context.Context) []Event {
+	var sections []string
+
+	// Projektets go.mod
+	gomodPath := "go.mod"
+	if a.cfg.RepoRoot != "" {
+		gomodPath = filepath.Join(a.cfg.RepoRoot, "go.mod")
+	}
+	projectMods, err := dep.ParseGoMod(gomodPath)
+	if err == nil && len(projectMods) > 0 {
+		scores := dep.CheckAll(ctx, projectMods)
+		sections = append(sections, dep.RenderReport(
+			fmt.Sprintf("Projekt (%d moduler)", len(projectMods)), scores,
+		))
+	} else if err != nil {
+		sections = append(sections, "Ingen go.mod fundet i projektet.")
+	}
+
+	// ekte-harness egne afhængigheder
+	ekteMods := dep.EkteDeps()
+	if len(ekteMods) > 0 {
+		ekteScores := dep.CheckAll(ctx, ekteMods)
+		sections = append(sections, dep.RenderReport(
+			fmt.Sprintf("ekte-harness (%d moduler)", len(ekteMods)), ekteScores,
+		))
+	}
+
+	if len(sections) == 0 {
+		return []Event{{Type: EventSystem, Content: "Ingen afhængigheder fundet."}}
+	}
+
+	output := strings.Join(sections, "\n\n────────────────────────\n\n")
+	return []Event{
+		{Type: EventSystem, Content: fmt.Sprintf("Tjekker afhængigheder... (%d + %d moduler)", len(projectMods), len(dep.EkteDeps()))},
+		{Type: EventToolOutput, Content: output},
+	}
+}
+
 func (a *Agent) handleCompress(ctx context.Context) []Event {
 	if a.cfg.Provider == nil {
 		return []Event{{Type: EventError, Content: "Ingen LLM konfigureret."}}
@@ -477,7 +519,8 @@ func helpText() string {
 		{"/compress", "komprimer kontekstvindue"},
 		{"/wiki \"spørgsmål\"", "søg i din personlige wiki"},
 		{"/hook [navn]", "vis hooks — angiv navn for at køre"},
-		{"/dep <modul>", "sikkerhedsscore for Go-afhængighed"},
+		{"/dep <modul>", "sikkerhedsscore for én Go-afhængighed"},
+		{"/deps", "scan alle afhængigheder + ekte-harness"},
 		{"/forresten <besked>", "side-chat med subagent (husker historik)"},
 		{"/clear", "ryd samtalen"},
 		{"/exit", "gem session og afslut"},

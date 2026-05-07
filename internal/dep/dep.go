@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
@@ -21,7 +24,12 @@ type Score struct {
 	Err       string
 }
 
-type proxyLatest struct {
+type Module struct {
+	Path    string
+	Version string
+}
+
+type proxyInfo struct {
 	Version string    `json:"Version"`
 	Time    time.Time `json:"Time"`
 }
@@ -33,13 +41,142 @@ type osvResponse struct {
 	} `json:"vulns"`
 }
 
-// Check henter version fra Go-proxy og kendte sårbarheder fra OSV.dev.
+// Check henter seneste version og tjekker alle kendte CVE'er for modulet.
 func Check(ctx context.Context, module string) Score {
-	sc := Score{Module: module}
+	return checkModule(ctx, module, "")
+}
+
+// CheckVersion tjekker en specifik version mod OSV — bruges ved go.mod-scanning.
+func CheckVersion(ctx context.Context, module, version string) Score {
+	return checkModule(ctx, module, version)
+}
+
+// CheckAll kører CheckVersion parallelt for alle moduler (max 8 ad gangen).
+func CheckAll(ctx context.Context, mods []Module) []Score {
+	scores := make([]Score, len(mods))
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+
+	for i, m := range mods {
+		wg.Add(1)
+		go func(i int, m Module) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			scores[i] = CheckVersion(ctx, m.Path, m.Version)
+		}(i, m)
+	}
+	wg.Wait()
+	return scores
+}
+
+// ParseGoMod læser alle require-linjer fra en go.mod fil.
+func ParseGoMod(path string) ([]Module, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var mods []Module
+	inRequire := false
+
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "require (" {
+			inRequire = true
+			continue
+		}
+		if inRequire && trimmed == ")" {
+			inRequire = false
+			continue
+		}
+		if strings.HasPrefix(trimmed, "require ") && !strings.Contains(trimmed, "(") {
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 3 {
+				mods = append(mods, Module{Path: parts[1], Version: parts[2]})
+			}
+			continue
+		}
+		if inRequire && trimmed != "" && !strings.HasPrefix(trimmed, "//") {
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 2 {
+				mods = append(mods, Module{Path: parts[0], Version: parts[1]})
+			}
+		}
+	}
+
+	return mods, nil
+}
+
+// EkteDeps returnerer alle afhængigheder i det kørende ekte-binary.
+func EkteDeps() []Module {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return nil
+	}
+	var mods []Module
+	for _, d := range info.Deps {
+		m := Module{Path: d.Path, Version: d.Version}
+		if d.Replace != nil {
+			m.Path = d.Replace.Path
+			m.Version = d.Replace.Version
+		}
+		mods = append(mods, m)
+	}
+	return mods
+}
+
+// RenderReport formaterer en sektion af scores kompakt til tool-panelet.
+func RenderReport(title string, scores []Score) string {
+	var sb strings.Builder
+	var clean, vulnTotal, errCount int
+
+	sb.WriteString(title + "\n\n")
+
+	for _, sc := range scores {
+		short := shortPath(sc.Module)
+		switch {
+		case sc.Err != "":
+			errCount++
+			sb.WriteString(fmt.Sprintf("? %s\n", short))
+		case sc.VulnCount > 0:
+			vulnTotal++
+			sb.WriteString(fmt.Sprintf("⚠ %s %s [%d CVE]\n", short, sc.Version, sc.VulnCount))
+			for _, v := range sc.Vulns {
+				sb.WriteString(fmt.Sprintf("  · %s\n", v))
+			}
+		default:
+			clean++
+			sb.WriteString(fmt.Sprintf("✓ %s %s\n", short, sc.Version))
+		}
+	}
+
+	sb.WriteString("\n")
+	parts := []string{fmt.Sprintf("%d rene", clean)}
+	if vulnTotal > 0 {
+		parts = append(parts, fmt.Sprintf("%d sårbar ⚠", vulnTotal))
+	}
+	if errCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d fejl", errCount))
+	}
+	sb.WriteString(strings.Join(parts, " · "))
+
+	return sb.String()
+}
+
+func checkModule(ctx context.Context, module, version string) Score {
+	sc := Score{Module: module, Version: version}
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Go module proxy: seneste version
-	proxyURL := "https://proxy.golang.org/" + encodePath(module) + "/@latest"
+	// Proxy: hent version og udgivelsesdato
+	var proxyURL string
+	if version != "" && version != "v0.0.0" {
+		proxyURL = "https://proxy.golang.org/" + encodePath(module) + "/@v/" + version + ".info"
+	} else {
+		proxyURL = "https://proxy.golang.org/" + encodePath(module) + "/@latest"
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, proxyURL, nil)
 	if err != nil {
 		sc.Err = err.Error()
@@ -54,19 +191,30 @@ func Check(ctx context.Context, module string) Score {
 	resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		sc.Err = fmt.Sprintf("modul ikke fundet (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
-		return sc
-	}
-	var pl proxyLatest
-	if err := json.Unmarshal(body, &pl); err == nil {
-		sc.Version = pl.Version
-		sc.Released = pl.Time
+		// Ikke fatal ved version-opslag — vi kender allerede versionen fra go.mod
+		if version == "" {
+			sc.Err = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+			return sc
+		}
+	} else {
+		var info proxyInfo
+		if err := json.Unmarshal(body, &info); err == nil {
+			if sc.Version == "" {
+				sc.Version = info.Version
+			}
+			sc.Released = info.Time
+		}
 	}
 
-	// OSV.dev: kendte CVE'er
-	osvBody, _ := json.Marshal(map[string]any{
+	// OSV: kendte CVE'er for denne version
+	osvPayload := map[string]any{
 		"package": map[string]string{"name": module, "ecosystem": "Go"},
-	})
+	}
+	if version != "" {
+		osvPayload["version"] = version
+	}
+	osvBody, _ := json.Marshal(osvPayload)
+
 	osvReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		"https://api.osv.dev/v1/query", bytes.NewReader(osvBody))
 	if err == nil {
@@ -80,8 +228,8 @@ func Check(ctx context.Context, module string) Score {
 					if v.Summary != "" {
 						line += ": " + v.Summary
 					}
-					if len(line) > 80 {
-						line = line[:77] + "..."
+					if len(line) > 72 {
+						line = line[:69] + "..."
 					}
 					sc.Vulns = append(sc.Vulns, line)
 				}
@@ -151,12 +299,21 @@ func (s Score) rating() int {
 	if s.Released.IsZero() {
 		r--
 	} else if time.Since(s.Released) < 30*24*time.Hour {
-		r-- // meget ny — ikke battle-tested
+		r--
 	}
 	if r < 1 {
 		r = 1
 	}
 	return r
+}
+
+// shortPath returnerer de to sidste segmenter af en modulsti, fx "charmbracelet/bubbletea".
+func shortPath(module string) string {
+	parts := strings.Split(module, "/")
+	if len(parts) >= 2 {
+		return strings.Join(parts[len(parts)-2:], "/")
+	}
+	return module
 }
 
 // encodePath konverterer store bogstaver til !<lille> til brug i proxy-URL.
