@@ -60,7 +60,7 @@ func Run(dir string) (bool, error) {
 	if _, err := os.Stat(ekteMdPath); os.IsNotExist(err) {
 		fmt.Println()
 		fmt.Println("Der er ingen ekte.md endnu.")
-		fmt.Println("Det er din projektkontekst — svarende til CLAUDE.md i Claude Code.")
+		fmt.Println("Det er din projektkontekst — loades automatisk som baggrundsviden i hver session.")
 		fmt.Println("Den loades automatisk som baggrundsviden i hver session.")
 		fmt.Println()
 		if ask(r, "Vil du oprette den nu?") {
@@ -81,18 +81,29 @@ func Run(dir string) (bool, error) {
 
 func runPRDGuide(r *bufio.Reader, path string) error {
 	fmt.Println()
-	fmt.Println("Jeg stiller dig fem korte spørgsmål.")
+	fmt.Println("Jeg stiller dig seks korte spørgsmål.")
 	fmt.Println()
 
 	name := prompt(r, "1. Hvad hedder projektet?")
-	problem := prompt(r, "2. Hvilket problem løser det? (én sætning)")
-	users := prompt(r, "3. Hvem er brugerne?")
-	features := prompt(r, "4. Hvad er de tre vigtigste features i v1? (adskil med komma)")
-	stack := prompt(r, "5. Hvilken teknisk stack bruger du?")
+	projectType := promptChoice(r, "2. Hvilken type projekt?", []string{"cli", "webapp", "library", "api", "andet"})
+	stack := prompt(r, "3. Hvilken teknisk stack bruger du?")
+	problem := prompt(r, "4. Hvilket problem løser det? (én sætning)")
+	users := prompt(r, "5. Hvem er brugerne?")
+	features := prompt(r, "6. Hvad er de tre vigtigste features i v1? (adskil med komma)")
 
 	featureList := formatList(features)
+	stackList := formatList(stack)
+	today := todayISO()
 
-	content := fmt.Sprintf(`# %s
+	content := fmt.Sprintf(`---
+name: %s
+type: %s
+stack: [%s]
+status: aktiv
+created: %s
+---
+
+# %s
 
 ## Hvad er dette projekt?
 
@@ -117,7 +128,7 @@ Målgruppe: %s
 ## Kom i gang
 
 Skriv '/spec <feature-navn>' for at starte på din første feature.
-`, name, problem, users, stack, featureList)
+`, name, projectType, stack, today, name, problem, users, stackList, featureList)
 
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return fmt.Errorf("skriv ekte.md: %w", err)
@@ -180,6 +191,33 @@ func toSlug(s string) string {
 		}
 	}
 	return strings.Trim(out.String(), "-")
+}
+
+func promptChoice(r *bufio.Reader, question string, options []string) string {
+	fmt.Printf("%s\n", question)
+	for i, o := range options {
+		fmt.Printf("  %d. %s\n", i+1, o)
+	}
+	fmt.Print("→ ")
+	raw := strings.TrimSpace(readLine(r))
+	for i, o := range options {
+		if raw == fmt.Sprintf("%d", i+1) || strings.EqualFold(raw, o) {
+			return o
+		}
+	}
+	if raw == "" {
+		return options[0]
+	}
+	return raw
+}
+
+func todayISO() string {
+	info, err := os.Stat("/proc/self")
+	if err != nil {
+		return "ukendt"
+	}
+	mod := info.ModTime()
+	return fmt.Sprintf("%d-%02d-%02d", mod.Year(), int(mod.Month()), mod.Day())
 }
 
 func ask(r *bufio.Reader, question string) bool {
