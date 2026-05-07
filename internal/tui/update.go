@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -9,15 +10,28 @@ import (
 	"github.com/danskode/ekte/internal/provider"
 )
 
-type msgAgentEvents struct {
-	events []agent.Event
-	err    error
+// msgStreamStarted returneres når kanalen er klar — TUI begynder at læse fra den.
+type msgStreamStarted struct{ ch <-chan agent.Event }
+
+// msgStreamEnd markerer at kanalen er lukket og streaming er færdig.
+type msgStreamEnd struct{}
+
+func startStreamCmd(a *agent.Agent, input string) tea.Cmd {
+	return func() tea.Msg {
+		ch := a.ProcessStream(context.Background(), input)
+		return msgStreamStarted{ch: ch}
+	}
 }
 
-func processCmd(a *agent.Agent, input string) tea.Cmd {
+// readStreamCmd venter på næste event fra kanalen og returnerer det som tea.Msg.
+// agent.Event implementerer tea.Msg da alle typer gør det.
+func readStreamCmd(ch <-chan agent.Event) tea.Cmd {
 	return func() tea.Msg {
-		events := a.Process(nil, input)
-		return msgAgentEvents{events: events}
+		ev, ok := <-ch
+		if !ok {
+			return msgStreamEnd{}
+		}
+		return ev
 	}
 }
 
@@ -92,6 +106,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyEnter:
+			if m.streaming {
+				return m, nil // ignorer input under streaming
+			}
 			val := strings.TrimSpace(m.input.Value())
 			if val == "" {
 				return m, nil
@@ -108,38 +125,74 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.conversation.SetContent(m.conversationContent())
 				m.conversation.GotoBottom()
 			}
-			return m, processCmd(m.agent, val)
+			return m, startStreamCmd(m.agent, val)
 		}
 
-	case msgAgentEvents:
-		if msg.err != nil {
-			m.appendSystem(styleError.Render(msg.err.Error()))
-			break
-		}
-		for _, ev := range msg.events {
-			switch ev.Type {
-			case agent.EventAssistant:
-				m.messages = append(m.messages, provider.Message{Role: "assistant", Content: ev.Content})
-				m.conversation.SetContent(m.conversationContent())
-				m.conversation.GotoBottom()
-			case agent.EventSystem:
-				if ev.Content == "" {
-					m.messages = nil
-					m.conversation.SetContent("")
-				} else {
-					m.appendSystem(ev.Content)
-				}
-			case agent.EventError:
-				m.appendSystem(styleError.Render(ev.Content))
-			case agent.EventTokenCount:
-				m.tokenCount = ev.Tokens
-			case agent.EventToolOutput:
-				m.toolOutput = ev.Content
-				m.toolPanel.SetContent(ev.Content)
-			case agent.EventQuit:
-				return m, tea.Quit
+	case msgStreamStarted:
+		m.streaming = true
+		m.streamBuf = ""
+		m.streamCh = msg.ch
+		return m, readStreamCmd(msg.ch)
+
+	case msgStreamEnd:
+		m.streaming = false
+		m.streamCh = nil
+
+	case agent.Event:
+		switch msg.Type {
+
+		case agent.EventStreamToken:
+			m.streamBuf += msg.Content
+			m.conversation.SetContent(m.conversationContent())
+			m.conversation.GotoBottom()
+			return m, readStreamCmd(m.streamCh)
+
+		case agent.EventStreamDone:
+			m.streaming = false
+			m.streamBuf = ""
+			m.streamCh = nil
+			m.messages = append(m.messages, provider.Message{Role: "assistant", Content: msg.Content})
+			m.conversation.SetContent(m.conversationContent())
+			m.conversation.GotoBottom()
+
+		case agent.EventAssistant:
+			// Bruges af /forresten og /wiki — ikke streaming
+			m.messages = append(m.messages, provider.Message{Role: "assistant", Content: msg.Content})
+			m.conversation.SetContent(m.conversationContent())
+			m.conversation.GotoBottom()
+
+		case agent.EventSystem:
+			if msg.Content == "" {
+				m.messages = nil
+				m.conversation.SetContent("")
+			} else {
+				m.appendSystem(msg.Content)
 			}
+
+		case agent.EventError:
+			m.streaming = false
+			m.streamBuf = ""
+			m.streamCh = nil
+			m.appendSystem(styleError.Render(msg.Content))
+
+		case agent.EventTokenCount:
+			m.tokenCount = msg.Tokens
+
+		case agent.EventToolOutput:
+			m.toolOutput = msg.Content
+			m.toolPanel.SetContent(msg.Content)
+
+		case agent.EventQuit:
+			return m, tea.Quit
 		}
+
+		// Hvis vi stadig streamer og næste event ikke er token (fx EventSystem fra slash),
+		// fortsæt med at læse kanalen
+		if m.streaming && m.streamCh != nil &&
+			msg.Type != agent.EventStreamToken {
+			return m, readStreamCmd(m.streamCh)
+		}
+
 		m.syncFromAgent()
 	}
 
@@ -160,7 +213,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// syncFromAgent synkroniserer token-count og aktiv skill fra agent til TUI.
 func (m *Model) syncFromAgent() {
 	if m.agent == nil {
 		return

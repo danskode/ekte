@@ -34,6 +34,10 @@ type Model struct {
 	savedDraft        string
 	pendingShiftEnter bool
 
+	streaming bool
+	streamBuf string
+	streamCh  <-chan agent.Event
+
 	tokenCount int
 	agent      *agent.Agent
 	ready      bool
@@ -96,6 +100,10 @@ func (m Model) conversationContent() string {
 		case "system":
 			sb.WriteString(styleSystem.Render("● "+msg.Content) + "\n\n")
 		}
+	}
+	if m.streaming {
+		content := m.streamBuf + "▌"
+		sb.WriteString(styleAssistant.Render("ekte") + "\n" + content + "\n\n")
 	}
 	return sb.String()
 }
