@@ -167,22 +167,24 @@ Målgruppe: %s
 }
 
 func runLLMSetup(r *bufio.Reader, configPath string) error {
-	provider := promptChoice(r, "Hvilken LLM-provider vil du bruge?", []string{
+	providerChoice := promptChoice(r, "Hvilken LLM-provider vil du bruge?", []string{
 		"OpenAI (GPT-4o mv.)",
 		"Anthropic (Claude)",
 		"Lokal (Ollama / LM Studio)",
 	})
-	fmt.Printf("   ✓ %s\n\n", provider)
+	fmt.Printf("   ✓ %s\n\n", providerChoice)
 
-	var providerKey, defaultModel, baseURL string
+	var providerKey, defaultModel, baseURL, envVar, keyURL string
 	switch {
-	case strings.HasPrefix(provider, "Anthropic"):
+	case strings.HasPrefix(providerChoice, "Anthropic"):
 		providerKey = "anthropic"
 		defaultModel = "claude-sonnet-4-6"
-	case strings.HasPrefix(provider, "Lokal"):
+		envVar = "ANTHROPIC_API_KEY"
+		keyURL = "console.anthropic.com"
+	case strings.HasPrefix(providerChoice, "Lokal"):
 		providerKey = "openai"
 		defaultModel = "llama3.2"
-		baseURL = prompt(r, fmt.Sprintf("Base URL (tryk Enter for %s):", "http://localhost:11434/v1"))
+		baseURL = prompt(r, "Base URL (tryk Enter for http://localhost:11434/v1):")
 		if baseURL == "" {
 			baseURL = "http://localhost:11434/v1"
 		}
@@ -190,6 +192,8 @@ func runLLMSetup(r *bufio.Reader, configPath string) error {
 	default:
 		providerKey = "openai"
 		defaultModel = "gpt-4o"
+		envVar = "OPENAI_API_KEY"
+		keyURL = "platform.openai.com/api-keys"
 	}
 
 	model := prompt(r, fmt.Sprintf("Model (tryk Enter for '%s'):", defaultModel))
@@ -198,14 +202,14 @@ func runLLMSetup(r *bufio.Reader, configPath string) error {
 	}
 	fmt.Printf("   ✓ %s\n\n", model)
 
-	apiKey := ""
-	if providerKey != "openai" || baseURL == "" {
-		apiKey = prompt(r, "API-nøgle (lad stå tom for at bruge env-variabel):")
-		if apiKey != "" {
-			fmt.Println("   ✓ Nøgle gemt")
-		} else {
-			fmt.Println("   ✓ Bruger env-variabel")
-		}
+	// API-nøgle: altid via env-variabel — aldrig gemt i fil
+	if envVar != "" {
+		fmt.Println("   API-nøgle:")
+		fmt.Printf("   Din nøgle hentes fra: %s\n", keyURL)
+		fmt.Println("   Sæt den som env-variabel — den gemmes IKKE i config-filen:")
+		fmt.Printf("   export %s=\"din-nøgle-her\"\n", envVar)
+		fmt.Println()
+		fmt.Println("   Tilføj linjen til ~/.bashrc eller ~/.zshrc så den er klar ved næste opstart.")
 		fmt.Println()
 	}
 
@@ -214,8 +218,12 @@ func runLLMSetup(r *bufio.Reader, configPath string) error {
 		baseURLLine = fmt.Sprintf("base_url: %q\n", baseURL)
 	}
 
-	content := fmt.Sprintf("provider: %s\nmodel: %s\n%sapi_key: %q\n",
-		providerKey, model, baseURLLine, apiKey)
+	content := fmt.Sprintf(
+		"# ekte konfiguration\n"+
+			"# API-nøgler gemmes ALDRIG her — brug env-variabel i stedet\n"+
+			"# Se onboarding-output for vejledning\n\n"+
+			"provider: %s\nmodel: %s\n%s",
+		providerKey, model, baseURLLine)
 
 	return os.WriteFile(configPath, []byte(content), 0600)
 }

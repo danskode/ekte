@@ -7,9 +7,11 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/danskode/ekte/internal/agent"
 	"github.com/danskode/ekte/internal/git"
 	"github.com/danskode/ekte/internal/onboarding"
 	"github.com/danskode/ekte/internal/provider"
+	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/tui"
 	"github.com/danskode/ekte/internal/wiki"
 	"gopkg.in/yaml.v3"
@@ -26,7 +28,6 @@ func main() {
 func runTUI() {
 	cwd, _ := os.Getwd()
 
-	// onboarding ved første kørsel
 	var welcomeName string
 	isFirstRun := onboarding.IsFirstRun(cwd)
 	if isFirstRun {
@@ -49,23 +50,43 @@ func runTUI() {
 
 	cfg, err := provider.LoadConfig(configPath)
 	if err == nil {
-		p, err = provider.NewFromConfig(cfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "provider fejl: %v\n", err)
+		if provider.MissingKey(cfg) {
+			fmt.Fprintf(os.Stderr, "⚠  Ingen API-nøgle fundet. Sæt env-variablen:\n")
+			if cfg.Provider == "anthropic" {
+				fmt.Fprintf(os.Stderr, "   export ANTHROPIC_API_KEY=\"din-nøgle\"\n\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "   export OPENAI_API_KEY=\"din-nøgle\"\n\n")
+			}
 		}
-		wCfg := &wiki.Config{
-			Enabled: cfg.Wiki.Enabled,
-			Path:    cfg.Wiki.Path,
-		}
-		wikiInst, err = wiki.New(wCfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "wiki advarsel: %v\n", err)
-		}
+		p, _ = provider.NewFromConfig(cfg)
+		wCfg := &wiki.Config{Enabled: cfg.Wiki.Enabled, Path: cfg.Wiki.Path}
+		wikiInst, _ = wiki.New(wCfg)
 	}
 
-	m := tui.New(p)
+	skills, skillErrs := skill.LoadAll(skillsDir)
+	for _, e := range skillErrs {
+		fmt.Fprintf(os.Stderr, "skill advarsel: %v\n", e)
+	}
 
-	// load ekte.md som system-kontekst
+	repoRoot := ""
+	if root, err := git.RepoRoot(cwd); err == nil {
+		repoRoot = root
+	}
+
+	a := agent.New(agent.Config{
+		Provider:   p,
+		Skills:     skills,
+		Wiki:       wikiInst,
+		RepoRoot:   repoRoot,
+		SessionDir: filepath.Join(".ekte", "sessions"),
+	})
+
+	m := tui.New(a)
+
+	if provider.KeyInFile(configPath) {
+		m.AddWarning("⚠  API-nøgle fundet i .ekte/config.yaml — flyt den til env-variabel:\nexport ANTHROPIC_API_KEY=\"din-nøgle\"  (tilføj til ~/.bashrc)")
+	}
+
 	if context := loadEkteMd(cwd); context != "" {
 		m.SetProjectContext(context)
 		if welcomeName == "" {
@@ -76,22 +97,6 @@ func runTUI() {
 	if isFirstRun {
 		m.SetWelcome(welcomeName)
 	}
-
-	if errs := m.LoadSkills(skillsDir); len(errs) > 0 {
-		for _, e := range errs {
-			fmt.Fprintf(os.Stderr, "skill advarsel: %v\n", e)
-		}
-	}
-
-	if root, err := git.RepoRoot(cwd); err == nil {
-		m.SetRepoRoot(root)
-	}
-
-	if wikiInst != nil {
-		m.SetWiki(wikiInst)
-	}
-
-	m.SetSessionDir(filepath.Join(".ekte", "sessions"))
 
 	prog := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := prog.Run(); err != nil {
@@ -121,16 +126,10 @@ func runInit() {
 		Provider string       `yaml:"provider"`
 		Model    string       `yaml:"model"`
 		BaseURL  string       `yaml:"base_url,omitempty"`
-		APIKey   string       `yaml:"api_key,omitempty"`
 		Wiki     *wiki.Config `yaml:"wiki,omitempty"`
 	}
 
-	cfg := fullConfig{
-		Provider: "openai",
-		Model:    "gpt-4o",
-		Wiki:     wikiCfg,
-	}
-
+	cfg := fullConfig{Provider: "openai", Model: "gpt-4o", Wiki: wikiCfg}
 	if data, err := os.ReadFile(configPath); err == nil {
 		_ = yaml.Unmarshal(data, &cfg)
 		cfg.Wiki = wikiCfg
