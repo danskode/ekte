@@ -101,6 +101,24 @@ func (m *Model) SetProjectContext(context string) {
 	}, m.messages...)
 }
 
+func (m *Model) SetWelcome(projectName string) {
+	name := projectName
+	if name == "" {
+		name = "dit projekt"
+	}
+	welcome := fmt.Sprintf(
+		"Hej! Du er nu klar til at spec'e %s.\n\n"+
+			"Vil du spec'e din første funktion, eller vil du først tilføje noget viden til din wiki, "+
+			"som vi kan bruge til at bygge efter?\n\n"+
+			"Du kan også se dine muligheder med /hjælp",
+		name,
+	)
+	m.messages = append(m.messages, provider.Message{
+		Role:    "assistant",
+		Content: welcome,
+	})
+}
+
 func (m *Model) SetSessionDir(dir string) {
 	m.sessionDir = dir
 }

@@ -27,15 +27,18 @@ func runTUI() {
 	cwd, _ := os.Getwd()
 
 	// onboarding ved første kørsel
-	if onboarding.IsFirstRun(cwd) {
-		ok, err := onboarding.Run(cwd)
+	var welcomeName string
+	isFirstRun := onboarding.IsFirstRun(cwd)
+	if isFirstRun {
+		result, err := onboarding.Run(cwd)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "onboarding fejl: %v\n", err)
 			os.Exit(1)
 		}
-		if !ok {
+		if !result.Ok {
 			os.Exit(0)
 		}
+		welcomeName = result.ProjectName
 	}
 
 	configPath := filepath.Join(".ekte", "config.yaml")
@@ -65,6 +68,13 @@ func runTUI() {
 	// load ekte.md som system-kontekst
 	if context := loadEkteMd(cwd); context != "" {
 		m.SetProjectContext(context)
+		if welcomeName == "" {
+			welcomeName = onboarding.ReadProjectName(filepath.Join(cwd, "ekte.md"))
+		}
+	}
+
+	if isFirstRun {
+		m.SetWelcome(welcomeName)
 	}
 
 	if errs := m.LoadSkills(skillsDir); len(errs) > 0 {

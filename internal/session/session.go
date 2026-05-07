@@ -102,8 +102,10 @@ func pruneOld(dir string) error {
 		return ii.ModTime().After(jj.ModTime())
 	})
 
-	for _, f := range files[maxSessions:] {
-		_ = os.Remove(filepath.Join(dir, f.Name()))
+	if len(files) > maxSessions {
+		for _, f := range files[maxSessions:] {
+			_ = os.Remove(filepath.Join(dir, f.Name()))
+		}
 	}
 	return nil
 }

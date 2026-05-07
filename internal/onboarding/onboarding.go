@@ -4,9 +4,15 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
+
+type Result struct {
+	ProjectName string
+	Ok          bool
+}
 
 // IsFirstRun returnerer true hvis .ekte/ ikke eksisterer i den givne mappe.
 func IsFirstRun(dir string) bool {
@@ -15,8 +21,7 @@ func IsFirstRun(dir string) bool {
 }
 
 // Run kører det interaktive onboarding-flow.
-// Returnerer false hvis brugeren afviser trust-check.
-func Run(dir string) (bool, error) {
+func Run(dir string) (Result, error) {
 	r := bufio.NewReader(os.Stdin)
 
 	fmt.Println()
@@ -27,73 +32,96 @@ func Run(dir string) (bool, error) {
 	fmt.Println()
 	if !ask(r, "Stoler du på koden i denne mappe?") {
 		fmt.Println("\nAfslutter — kør ekte igen i en mappe du stoler på.")
-		return false, nil
+		return Result{Ok: false}, nil
 	}
+	fmt.Println("✓ Godt.")
 
-	// 2. Initialiser .ekte/
-	dirs := []string{
+	// 2. Initialiser mappestruktur
+	for _, d := range []string{
 		filepath.Join(dir, ".ekte"),
 		filepath.Join(dir, ".ekte", "skills"),
 		filepath.Join(dir, ".ekte", "hooks"),
 		filepath.Join(dir, ".ekte", "sessions"),
 		filepath.Join(dir, "specs"),
-	}
-	for _, d := range dirs {
+	} {
 		if err := os.MkdirAll(d, 0755); err != nil {
-			return false, fmt.Errorf("opret mappe %s: %w", d, err)
-		}
-	}
-
-	// kopier config-eksempel hvis ingen config findes
-	configPath := filepath.Join(dir, ".ekte", "config.yaml")
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		examplePath := filepath.Join(dir, ".ekte", "config.yaml.example")
-		if data, err := os.ReadFile(examplePath); err == nil {
-			_ = os.WriteFile(configPath, data, 0600)
-		} else {
-			writeDefaultConfig(configPath)
+			return Result{}, fmt.Errorf("opret mappe %s: %w", d, err)
 		}
 	}
 
 	// 3. ekte.md
+	var projectName string
 	ekteMdPath := filepath.Join(dir, "ekte.md")
 	if _, err := os.Stat(ekteMdPath); os.IsNotExist(err) {
 		fmt.Println()
 		fmt.Println("Der er ingen ekte.md endnu.")
 		fmt.Println("Det er din projektkontekst — loades automatisk som baggrundsviden i hver session.")
-		fmt.Println("Den loades automatisk som baggrundsviden i hver session.")
 		fmt.Println()
 		if ask(r, "Vil du oprette den nu?") {
-			if err := runPRDGuide(r, ekteMdPath); err != nil {
-				return false, err
+			var err error
+			projectName, err = runPRDGuide(r, ekteMdPath)
+			if err != nil {
+				return Result{}, err
 			}
 		}
+	} else {
+		projectName = readProjectName(ekteMdPath)
 	}
 
-	// 4. Provider-check
-	checkProvider(configPath)
+	// 4. LLM-opsætning
+	fmt.Println()
+	fmt.Println("LLM-opsætning")
+	fmt.Println("─────────────")
+	configPath := filepath.Join(dir, ".ekte", "config.yaml")
+	if err := runLLMSetup(r, configPath); err != nil {
+		return Result{}, err
+	}
+
+	// 5. Wiki
+	fmt.Println()
+	fmt.Println("Wiki")
+	fmt.Println("────")
+	fmt.Println("En personlig wiki samler din viden på tværs af projekter.")
+	if ask(r, "Vil du sætte en wiki op?") {
+		wikiPath := runWikiSetup(r, dir)
+		if wikiPath != "" {
+			appendWikiConfig(configPath, wikiPath)
+			fmt.Printf("✓ Wiki konfigureret: %s\n", wikiPath)
+		}
+	} else {
+		fmt.Println("  Du kan altid sætte det op senere med 'ekte init'.")
+	}
 
 	fmt.Println()
-	fmt.Println("✓ Klar — starter ekte...")
+	fmt.Println("✓ Alt klar!")
 	fmt.Println()
-	return true, nil
+	fmt.Print("Tryk Enter for at starte ekte...")
+	readLine(r)
+	return Result{Ok: true, ProjectName: projectName}, nil
 }
 
-func runPRDGuide(r *bufio.Reader, path string) error {
+func runPRDGuide(r *bufio.Reader, path string) (string, error) {
 	fmt.Println()
 	fmt.Println("Jeg stiller dig seks korte spørgsmål.")
 	fmt.Println()
 
 	name := prompt(r, "1. Hvad hedder projektet?")
-	projectType := promptChoice(r, "2. Hvilken type projekt?", []string{"cli", "webapp", "library", "api", "andet"})
-	stack := prompt(r, "3. Hvilken teknisk stack bruger du?")
-	problem := prompt(r, "4. Hvilket problem løser det? (én sætning)")
-	users := prompt(r, "5. Hvem er brugerne?")
-	features := prompt(r, "6. Hvad er de tre vigtigste features i v1? (adskil med komma)")
+	fmt.Printf("   ✓ %s\n\n", name)
 
-	featureList := formatList(features)
-	stackList := formatList(stack)
-	today := todayISO()
+	projectType := promptChoice(r, "2. Hvilken type projekt?", []string{"cli", "webapp", "library", "api", "andet"})
+	fmt.Printf("   ✓ %s\n\n", projectType)
+
+	stack := prompt(r, "3. Hvilken teknisk stack bruger du?")
+	fmt.Printf("   ✓ %s\n\n", stack)
+
+	problem := prompt(r, "4. Hvilket problem løser det? (én sætning)")
+	fmt.Printf("   ✓ Noteret\n\n")
+
+	users := prompt(r, "5. Hvem er brugerne?")
+	fmt.Printf("   ✓ %s\n\n", users)
+
+	features := prompt(r, "6. Hvad er de tre vigtigste features i v1? (adskil med komma)")
+	fmt.Printf("   ✓ Noteret\n\n")
 
 	content := fmt.Sprintf(`---
 name: %s
@@ -124,55 +152,154 @@ Målgruppe: %s
 - Spec-drevet workflow: skriv spec i specs/ inden implementation
 - Brug /spec <navn> for at oprette en ny feature-branch
 - Kode skal være lean og sikker — ingen unødvendige dependencies
-
-## Kom i gang
-
-Skriv '/spec <feature-navn>' for at starte på din første feature.
-`, name, projectType, stack, today, name, problem, users, stackList, featureList)
+`,
+		name, projectType, stack, todayISO(),
+		name, problem, users,
+		formatList(stack),
+		formatList(features),
+	)
 
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		return fmt.Errorf("skriv ekte.md: %w", err)
+		return "", fmt.Errorf("skriv ekte.md: %w", err)
+	}
+	fmt.Printf("✓ ekte.md oprettet\n")
+	return name, nil
+}
+
+func runLLMSetup(r *bufio.Reader, configPath string) error {
+	provider := promptChoice(r, "Hvilken LLM-provider vil du bruge?", []string{
+		"OpenAI (GPT-4o mv.)",
+		"Anthropic (Claude)",
+		"Lokal (Ollama / LM Studio)",
+	})
+	fmt.Printf("   ✓ %s\n\n", provider)
+
+	var providerKey, defaultModel, baseURL string
+	switch {
+	case strings.HasPrefix(provider, "Anthropic"):
+		providerKey = "anthropic"
+		defaultModel = "claude-sonnet-4-6"
+	case strings.HasPrefix(provider, "Lokal"):
+		providerKey = "openai"
+		defaultModel = "llama3.2"
+		baseURL = prompt(r, fmt.Sprintf("Base URL (tryk Enter for %s):", "http://localhost:11434/v1"))
+		if baseURL == "" {
+			baseURL = "http://localhost:11434/v1"
+		}
+		fmt.Printf("   ✓ %s\n\n", baseURL)
+	default:
+		providerKey = "openai"
+		defaultModel = "gpt-4o"
 	}
 
-	fmt.Printf("\n✓ ekte.md oprettet\n")
-	fmt.Printf("  Tip: skriv '/spec %s' for at starte på din første feature.\n",
-		toSlug(strings.Split(features, ",")[0]))
+	model := prompt(r, fmt.Sprintf("Model (tryk Enter for '%s'):", defaultModel))
+	if model == "" {
+		model = defaultModel
+	}
+	fmt.Printf("   ✓ %s\n\n", model)
+
+	apiKey := ""
+	if providerKey != "openai" || baseURL == "" {
+		apiKey = prompt(r, "API-nøgle (lad stå tom for at bruge env-variabel):")
+		if apiKey != "" {
+			fmt.Println("   ✓ Nøgle gemt")
+		} else {
+			fmt.Println("   ✓ Bruger env-variabel")
+		}
+		fmt.Println()
+	}
+
+	baseURLLine := ""
+	if baseURL != "" {
+		baseURLLine = fmt.Sprintf("base_url: %q\n", baseURL)
+	}
+
+	content := fmt.Sprintf("provider: %s\nmodel: %s\n%sapi_key: %q\n",
+		providerKey, model, baseURLLine, apiKey)
+
+	return os.WriteFile(configPath, []byte(content), 0600)
+}
+
+func runWikiSetup(r *bufio.Reader, dir string) string {
+	scope := promptChoice(r, "Skal wikien være global eller lokal?", []string{
+		"Global — delt på tværs af projekter (~/.ekte/wiki)",
+		"Lokal — kun dette projekt (.ekte/wiki)",
+	})
+
+	var wikiPath string
+	if strings.HasPrefix(scope, "Lokal") {
+		wikiPath = filepath.Join(dir, ".ekte", "wiki")
+	} else {
+		home, _ := os.UserHomeDir()
+		wikiPath = filepath.Join(home, ".ekte", "wiki")
+	}
+
+	if _, err := os.Stat(wikiPath); err == nil {
+		fmt.Printf("   ✓ Eksisterende wiki fundet: %s\n", wikiPath)
+		return wikiPath
+	}
+
+	fmt.Println()
+	if ask(r, "Har du et eksisterende wiki-repo?") {
+		url := prompt(r, "Git URL:")
+		if err := cloneWiki(url, wikiPath); err != nil {
+			fmt.Printf("   ⚠  Kunne ikke klone: %v\n", err)
+			return ""
+		}
+	} else {
+		fmt.Println("   Kloner wiki-template...")
+		if err := cloneWiki("https://github.com/danskode/simple-wiki.git", wikiPath); err != nil {
+			fmt.Printf("   ⚠  Kunne ikke klone template: %v\n", err)
+			return ""
+		}
+	}
+	return wikiPath
+}
+
+func cloneWiki(url, dest string) error {
+	_ = os.MkdirAll(filepath.Dir(dest), 0755)
+	out, err := runCmd("git", "clone", url, dest)
+	if err != nil {
+		return fmt.Errorf("%s", out)
+	}
 	return nil
 }
 
-func checkProvider(configPath string) {
-	hasKey := os.Getenv("OPENAI_API_KEY") != "" ||
-		os.Getenv("ANTHROPIC_API_KEY") != ""
-
-	if hasKey {
-		return
-	}
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return
-	}
-	if strings.Contains(string(data), "api_key: \"\"") || !strings.Contains(string(data), "api_key:") {
-		fmt.Println()
-		fmt.Println("⚠  Ingen API-nøgle fundet.")
-		fmt.Println("   Sæt din nøgle i .ekte/config.yaml eller som env-variabel:")
-		fmt.Println("   export OPENAI_API_KEY=...  eller  export ANTHROPIC_API_KEY=...")
-	}
+func appendWikiConfig(configPath, wikiPath string) {
+	data, _ := os.ReadFile(configPath)
+	content := string(data) + fmt.Sprintf("\nwiki:\n  enabled: true\n  path: %q\n", wikiPath)
+	_ = os.WriteFile(configPath, []byte(content), 0600)
 }
 
-func writeDefaultConfig(path string) {
-	content := `provider: openai
-model: gpt-4o
-base_url: ""
-api_key: ""
-`
-	_ = os.WriteFile(path, []byte(content), 0600)
+func ReadProjectName(ekteMdPath string) string {
+	return readProjectName(ekteMdPath)
+}
+
+func readProjectName(ekteMdPath string) string {
+	data, err := os.ReadFile(ekteMdPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "name:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "name:"))
+		}
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimPrefix(line, "# ")
+		}
+	}
+	return ""
+}
+
+func runCmd(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 func formatList(csv string) string {
-	items := strings.Split(csv, ",")
 	var sb strings.Builder
-	for _, item := range items {
+	for _, item := range strings.Split(csv, ",") {
 		item = strings.TrimSpace(item)
 		if item != "" {
 			sb.WriteString("- " + item + "\n")
