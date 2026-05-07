@@ -12,12 +12,22 @@ type WikiConfig struct {
 	Path    string `yaml:"path"`
 }
 
+// WhitelistConfig styrer hvilke operationer agenten må udføre uden bekræftelse.
+// Alt er forbudt som standard — tilføj eksplicit til .ekte/config.yaml.
+type WhitelistConfig struct {
+	GitWorktree bool `yaml:"git_worktree"` // /spec opret/merge/fjern
+	WikiWrite   bool `yaml:"wiki_write"`   // /wiki gem
+	HookRun     bool `yaml:"hook_run"`     // /hook <navn>
+}
+
 type Config struct {
-	Provider string     `yaml:"provider"`
-	Model    string     `yaml:"model"`
-	BaseURL  string     `yaml:"base_url"`
-	APIKey   string     `yaml:"api_key"` // læses kun fra env — advarsel hvis sat i fil
-	Wiki     WikiConfig `yaml:"wiki"`
+	Provider  string            `yaml:"provider"`
+	Model     string            `yaml:"model"`
+	BaseURL   string            `yaml:"base_url"`
+	APIKey    string            `yaml:"api_key"` // læses kun fra env — advarsel hvis sat i fil
+	Wiki      WikiConfig        `yaml:"wiki"`
+	Whitelist WhitelistConfig   `yaml:"whitelist"`
+	Hooks     map[string]string `yaml:"hooks,omitempty"` // navn → shell-kommando
 }
 
 // KeyInFile returnerer true hvis api_key er sat direkte i config-filen.

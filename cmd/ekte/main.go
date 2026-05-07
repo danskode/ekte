@@ -73,12 +73,21 @@ func runTUI() {
 		repoRoot = root
 	}
 
+	var whitelist provider.WhitelistConfig
+	var hooks map[string]string
+	if cfg != nil {
+		whitelist = cfg.Whitelist
+		hooks = cfg.Hooks
+	}
+
 	a := agent.New(agent.Config{
 		Provider:   p,
 		Skills:     skills,
 		Wiki:       wikiInst,
 		RepoRoot:   repoRoot,
 		SessionDir: filepath.Join(".ekte", "sessions"),
+		Whitelist:  whitelist,
+		Hooks:      hooks,
 	})
 
 	m := tui.New(a)
@@ -123,10 +132,12 @@ func runInit() {
 	}
 
 	type fullConfig struct {
-		Provider string       `yaml:"provider"`
-		Model    string       `yaml:"model"`
-		BaseURL  string       `yaml:"base_url,omitempty"`
-		Wiki     *wiki.Config `yaml:"wiki,omitempty"`
+		Provider  string                   `yaml:"provider"`
+		Model     string                   `yaml:"model"`
+		BaseURL   string                   `yaml:"base_url,omitempty"`
+		Wiki      *wiki.Config             `yaml:"wiki,omitempty"`
+		Whitelist provider.WhitelistConfig  `yaml:"whitelist"`
+		Hooks     map[string]string        `yaml:"hooks,omitempty"`
 	}
 
 	cfg := fullConfig{Provider: "openai", Model: "gpt-4o", Wiki: wikiCfg}
@@ -147,5 +158,20 @@ func runInit() {
 	}
 
 	fmt.Printf("✓ Config gemt: %s\n", configPath)
-	fmt.Println("\nKør 'ekte' for at starte.")
+	fmt.Println()
+	fmt.Println("Whitelist (tilladelser) er sat til false som standard.")
+	fmt.Println("Rediger .ekte/config.yaml for at tillade operationer:")
+	fmt.Println()
+	fmt.Println("  whitelist:")
+	fmt.Println("    git_worktree: true   # /spec opret/merge/fjern")
+	fmt.Println("    wiki_write:   true   # /wiki gem")
+	fmt.Println("    hook_run:     true   # /hook <navn>")
+	fmt.Println()
+	fmt.Println("Tilføj hooks med navne og shell-kommandoer, fx:")
+	fmt.Println()
+	fmt.Println("  hooks:")
+	fmt.Println("    test: go test ./...")
+	fmt.Println("    lint: golangci-lint run")
+	fmt.Println()
+	fmt.Println("Kør 'ekte' for at starte.")
 }
