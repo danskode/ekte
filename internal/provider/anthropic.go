@@ -36,7 +36,11 @@ type anthropicMessage struct {
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message) (*Response, error) {
-	body, err := p.buildRequest(messages, false)
+	return p.ChatWithTools(ctx, messages, nil)
+}
+
+func (p *AnthropicProvider) ChatWithTools(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error) {
+	body, err := p.buildRequest(messages, false, tools)
 	if err != nil {
 		return nil, err
 	}
@@ -59,25 +63,35 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message) (*Resp
 
 	var ar struct {
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
 		return nil, fmt.Errorf("anthropic decode: %w", err)
 	}
-	var text strings.Builder
+	out := &Response{StopReason: ar.StopReason}
 	for _, c := range ar.Content {
-		if c.Type == "text" {
-			text.WriteString(c.Text)
+		switch c.Type {
+		case "text":
+			out.Content += c.Text
+		case "tool_use":
+			out.ToolCalls = append(out.ToolCalls, ToolCall{
+				ID:    c.ID,
+				Name:  c.Name,
+				Input: c.Input,
+			})
 		}
 	}
-	return &Response{Content: text.String(), StopReason: ar.StopReason}, nil
+	return out, nil
 }
 
 func (p *AnthropicProvider) Stream(ctx context.Context, messages []Message) (<-chan string, error) {
-	body, err := p.buildRequest(messages, true)
+	body, err := p.buildRequest(messages, true, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +146,7 @@ func parseAnthropicSSE(r io.Reader, ch chan<- string) {
 }
 
 // buildRequest bygger request-body. System-beskeder udtrækkes til Anthropics separate system-felt.
-func (p *AnthropicProvider) buildRequest(messages []Message, stream bool) ([]byte, error) {
+func (p *AnthropicProvider) buildRequest(messages []Message, stream bool, tools []ToolDefinition) ([]byte, error) {
 	system, filtered := separateSystemMessages(messages)
 
 	payload := map[string]any{
@@ -145,6 +159,17 @@ func (p *AnthropicProvider) buildRequest(messages []Message, stream bool) ([]byt
 	}
 	if stream {
 		payload["stream"] = true
+	}
+	if len(tools) > 0 {
+		var at []map[string]any
+		for _, t := range tools {
+			at = append(at, map[string]any{
+				"name":         t.Name,
+				"description":  t.Description,
+				"input_schema": t.Parameters,
+			})
+		}
+		payload["tools"] = at
 	}
 	return json.Marshal(payload)
 }
@@ -172,10 +197,42 @@ func separateSystemMessages(messages []Message) (system string, filtered []Messa
 	return sb.String(), filtered
 }
 
-func toAnthropicMessages(msgs []Message) []anthropicMessage {
-	out := make([]anthropicMessage, len(msgs))
-	for i, m := range msgs {
-		out[i] = anthropicMessage{Role: m.Role, Content: m.Content}
+// toAnthropicMessages konverterer messages til Anthropics format.
+// Tool calls og tool-resultater kræver særlige content-blokke.
+func toAnthropicMessages(msgs []Message) []map[string]any {
+	var out []map[string]any
+	for _, m := range msgs {
+		switch {
+		case m.Role == "tool":
+			// Tool-resultat: sendes som user-besked med tool_result content
+			out = append(out, map[string]any{
+				"role": "user",
+				"content": []map[string]any{{
+					"type":        "tool_result",
+					"tool_use_id": m.ToolCallID,
+					"content":     m.Content,
+				}},
+			})
+		case len(m.ToolCalls) > 0:
+			// Assistant-besked med tool calls
+			var content []map[string]any
+			if m.Content != "" {
+				content = append(content, map[string]any{"type": "text", "text": m.Content})
+			}
+			for _, tc := range m.ToolCalls {
+				var input any
+				_ = json.Unmarshal(tc.Input, &input)
+				content = append(content, map[string]any{
+					"type":  "tool_use",
+					"id":    tc.ID,
+					"name":  tc.Name,
+					"input": input,
+				})
+			}
+			out = append(out, map[string]any{"role": "assistant", "content": content})
+		default:
+			out = append(out, map[string]any{"role": m.Role, "content": m.Content})
+		}
 	}
 	return out
 }
