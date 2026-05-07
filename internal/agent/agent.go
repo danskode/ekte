@@ -299,9 +299,26 @@ func (a *Agent) handleSkills(arg string) []Event {
 }
 
 func (a *Agent) handleSpec(ctx context.Context, arg string) []Event {
+	var initEvents []Event
 	if a.cfg.RepoRoot == "" {
-		return []Event{{Type: EventError, Content: "Ikke i et git-repo. Kør 'git init' først."}}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return []Event{{Type: EventError, Content: "Kan ikke finde arbejdsmappe: " + err.Error()}}
+		}
+		if out, err := exec.Command("git", "-C", cwd, "init").CombinedOutput(); err != nil {
+			return []Event{{Type: EventError, Content: "git init fejlede: " + strings.TrimSpace(string(out))}}
+		}
+		if out, err := exec.Command("git", "-C", cwd, "commit", "--allow-empty", "-m", "init").CombinedOutput(); err != nil {
+			return []Event{{Type: EventError, Content: "git commit fejlede: " + strings.TrimSpace(string(out))}}
+		}
+		a.cfg.RepoRoot = cwd
+		initEvents = []Event{{Type: EventSystem, Content: "✓ Git-repo initialiseret"}}
 	}
+	result := a.execSpec(arg)
+	return append(initEvents, result...)
+}
+
+func (a *Agent) execSpec(arg string) []Event {
 	if arg == "" || arg == "list" {
 		wts, err := git.List(a.cfg.RepoRoot)
 		if err != nil {
