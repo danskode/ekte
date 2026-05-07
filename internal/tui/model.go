@@ -97,22 +97,59 @@ func (m *Model) SetWelcome(projectName string) {
 }
 
 func (m Model) conversationContent() string {
+	w := m.conversation.Width
+	if w <= 0 {
+		w = 80
+	}
 	var sb strings.Builder
 	for _, msg := range m.messages {
 		switch msg.Role {
 		case "user":
-			sb.WriteString(styleUser.Render("Du") + "\n" + msg.Content + "\n\n")
+			sb.WriteString(styleUser.Render("Du") + "\n" + wordWrap(msg.Content, w) + "\n\n")
 		case "assistant":
-			sb.WriteString(styleAssistant.Render("ekte") + "\n" + msg.Content + "\n\n")
+			sb.WriteString(styleAssistant.Render("ekte") + "\n" + wordWrap(msg.Content, w) + "\n\n")
 		case "system":
-			sb.WriteString(styleSystem.Render("● "+msg.Content) + "\n\n")
+			sb.WriteString(styleSystem.Render("● "+wordWrap(msg.Content, w)) + "\n\n")
 		}
 	}
 	if m.streaming {
-		content := m.streamBuf + "▌"
-		sb.WriteString(styleAssistant.Render("ekte") + "\n" + content + "\n\n")
+		sb.WriteString(styleAssistant.Render("ekte") + "\n" + wordWrap(m.streamBuf, w) + "▌\n\n")
 	}
 	return sb.String()
+}
+
+// wordWrap bryder lange linjer ved whitespace uden at ødelægge eksisterende linjeskift.
+func wordWrap(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	var out strings.Builder
+	for i, line := range strings.Split(s, "\n") {
+		if i > 0 {
+			out.WriteByte('\n')
+		}
+		if len(line) <= width {
+			out.WriteString(line)
+			continue
+		}
+		col := 0
+		for j, word := range strings.Fields(line) {
+			wl := len(word)
+			if j == 0 {
+				out.WriteString(word)
+				col = wl
+			} else if col+1+wl <= width {
+				out.WriteByte(' ')
+				out.WriteString(word)
+				col += 1 + wl
+			} else {
+				out.WriteByte('\n')
+				out.WriteString(word)
+				col = wl
+			}
+		}
+	}
+	return out.String()
 }
 
 func (m Model) contextStyle() lipgloss.Style {
