@@ -1,0 +1,15 @@
+{
+  "id": "20260507-125016",
+  "title": "hejOMOMOMOM",
+  "saved_at": "2026-05-07T12:50:16.75437416+02:00",
+  "messages": [
+    {
+      "Role": "user",
+      "Content": "hejOMOMOMOM"
+    },
+    {
+      "Role": "system",
+      "Content": "Fejl: openai stream: Post \"http://localhost:11434/v1/chat/completions\": dial tcp [::1]:11434: connect: connection refused"
+    }
+  ]
+}

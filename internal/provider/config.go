@@ -16,8 +16,27 @@ type Config struct {
 	Provider string     `yaml:"provider"`
 	Model    string     `yaml:"model"`
 	BaseURL  string     `yaml:"base_url"`
-	APIKey   string     `yaml:"api_key"`
+	APIKey   string     `yaml:"api_key"` // læses kun fra env — advarsel hvis sat i fil
 	Wiki     WikiConfig `yaml:"wiki"`
+}
+
+// KeyInFile returnerer true hvis api_key er sat direkte i config-filen.
+// Bruges til at vise sikkerhedsadvarsel i TUI.
+func KeyInFile(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return false
+	}
+	v, ok := raw["api_key"]
+	if !ok {
+		return false
+	}
+	s, _ := v.(string)
+	return s != ""
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -29,15 +48,27 @@ func LoadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
-	if cfg.APIKey == "" {
-		switch cfg.Provider {
-		case "anthropic":
-			cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
-		default:
-			cfg.APIKey = os.Getenv("OPENAI_API_KEY")
+	// env-variabel har forrang over fil
+	switch cfg.Provider {
+	case "anthropic":
+		if env := os.Getenv("ANTHROPIC_API_KEY"); env != "" {
+			cfg.APIKey = env
+		}
+	default:
+		if env := os.Getenv("OPENAI_API_KEY"); env != "" {
+			cfg.APIKey = env
 		}
 	}
 	return &cfg, nil
+}
+
+// MissingKey returnerer true hvis ingen API-nøgle er tilgængelig
+// (hverken env-variabel eller config-fil) for en cloud-provider.
+func MissingKey(cfg *Config) bool {
+	if cfg.BaseURL != "" {
+		return false // lokal provider — ingen nøgle nødvendig
+	}
+	return cfg.APIKey == ""
 }
 
 func NewFromConfig(cfg *Config) (Provider, error) {
