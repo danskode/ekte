@@ -50,15 +50,21 @@ func runTUI() {
 	var wikiInst *wiki.Wiki
 
 	cfg, err := provider.LoadConfig(configPath)
-	if err == nil {
-		if provider.MissingKey(cfg) {
-			fmt.Fprintf(os.Stderr, "⚠  Ingen API-nøgle fundet. Sæt env-variablen:\n")
-			if cfg.Provider == "anthropic" {
-				fmt.Fprintf(os.Stderr, "   export ANTHROPIC_API_KEY=\"din-nøgle\"\n\n")
-			} else {
-				fmt.Fprintf(os.Stderr, "   export OPENAI_API_KEY=\"din-nøgle\"\n\n")
-			}
+
+	profile := loadProfile()
+	if profile.UserName == "" || profile.AgentName == "" {
+		profile = promptProfile()
+		saveProfile(profile)
+	}
+
+	if err != nil || provider.MissingKey(cfg) {
+		if !promptAPISetup(configPath) {
+			os.Exit(0)
 		}
+		cfg, err = provider.LoadConfig(configPath)
+	}
+
+	if err == nil {
 		p, _ = provider.NewFromConfig(cfg)
 		wCfg := &wiki.Config{Enabled: cfg.Wiki.Enabled, Path: cfg.Wiki.Path}
 		wikiInst, _ = wiki.New(wCfg)
@@ -91,12 +97,6 @@ func runTUI() {
 		Whitelist:  whitelist,
 		Hooks:      hooks,
 	})
-
-	profile := loadProfile()
-	if profile.UserName == "" || profile.AgentName == "" {
-		profile = promptProfile()
-		saveProfile(profile)
-	}
 
 	m := tui.New(a)
 	m.SetNames(profile.UserName, profile.AgentName)
@@ -165,6 +165,121 @@ func promptProfile() ekteProfile {
 
 	fmt.Println()
 	return ekteProfile{UserName: userName, AgentName: agentName}
+}
+
+func promptAPISetup(configPath string) bool {
+	reader := bufio.NewReader(os.Stdin)
+	bold := "\033[1m"
+	reset := "\033[0m"
+
+	fmt.Println()
+	fmt.Printf("%s🔑 API-opsætning%s\n", bold, reset)
+	fmt.Println(strings.Repeat("─", 48))
+	fmt.Println()
+	fmt.Println("Ekte har brug for adgang til en AI-model.")
+	fmt.Println("Vælg hvilken provider du vil bruge:")
+	fmt.Println()
+	fmt.Println("  1. Anthropic Claude  (betalt cloud-API)")
+	fmt.Println("  2. OpenAI            (betalt cloud-API)")
+	fmt.Println("  3. Lokal Ollama      (gratis, kører på din maskine)")
+	fmt.Println()
+	fmt.Printf("Valg [1-3]: ")
+
+	choice, _ := reader.ReadString('\n')
+	choice = strings.TrimSpace(choice)
+
+	switch choice {
+	case "1":
+		setConfigProvider(configPath, "anthropic", "claude-sonnet-4-6", "")
+		printCloudKeyGuide("ANTHROPIC_API_KEY", "console.anthropic.com → API Keys")
+		_, _ = reader.ReadString('\n')
+		return false
+	case "2":
+		setConfigProvider(configPath, "openai", "gpt-4o", "")
+		printCloudKeyGuide("OPENAI_API_KEY", "platform.openai.com → API Keys")
+		_, _ = reader.ReadString('\n')
+		return false
+	case "3":
+		return setupOllama(reader, configPath)
+	default:
+		fmt.Println("\nUgyldigt valg — genstart ekte og prøv igen.")
+		return false
+	}
+}
+
+func printCloudKeyGuide(envVar, keyURL string) {
+	bold := "\033[1m"
+	reset := "\033[0m"
+	dim := "\033[2m"
+
+	fmt.Println()
+	fmt.Println("Din API-nøgle skal leve i en miljøvariabel — aldrig i en fil.")
+	fmt.Printf("%sNøgler i filer risikerer at lække via git-historik.%s\n", dim, reset)
+	fmt.Println()
+	fmt.Println("Trin 1 — Hent din nøgle:")
+	fmt.Printf("         %s\n", keyURL)
+	fmt.Println()
+	fmt.Println("Trin 2 — Sæt den i din aktuelle terminal-session:")
+	fmt.Printf("         %sexport %s=\"din-nøgle-her\"%s\n", bold, envVar, reset)
+	fmt.Println()
+	fmt.Println("Trin 3 — Gør den permanent (tilføj til din shell-profil):")
+	fmt.Printf("         %secho 'export %s=\"din-nøgle\"' >> ~/.bashrc%s\n", bold, envVar, reset)
+	fmt.Printf("         %s# Brug ~/.zshrc i stedet hvis du kører zsh%s\n", dim, reset)
+	fmt.Println()
+	fmt.Println("Genstart ekte i en ny terminal når nøglen er sat.")
+	fmt.Println()
+	fmt.Printf("Tryk Enter for at afslutte...")
+}
+
+func setupOllama(reader *bufio.Reader, configPath string) bool {
+	bold := "\033[1m"
+	reset := "\033[0m"
+
+	fmt.Println()
+	fmt.Printf("%sLokal Ollama%s\n", bold, reset)
+	fmt.Println(strings.Repeat("─", 48))
+	fmt.Println()
+	fmt.Println("Ollama kræver ingen API-nøgle — kører helt lokalt.")
+	fmt.Println("Sørg for at Ollama er installeret: ollama.com")
+	fmt.Println()
+
+	fmt.Printf("Base URL (Enter = http://localhost:11434/v1): ")
+	baseURL, _ := reader.ReadString('\n')
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		baseURL = "http://localhost:11434/v1"
+	}
+
+	fmt.Printf("Model    (Enter = llama3.2): ")
+	model, _ := reader.ReadString('\n')
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = "llama3.2"
+	}
+
+	setConfigProvider(configPath, "openai", model, baseURL)
+	fmt.Printf("\n✓ Config gemt. Starter ekte...\n\n")
+	return true
+}
+
+// setConfigProvider opdaterer provider/model/base_url i config-filen uden at røre andre felter.
+// api_key slettes aktivt — nøgler hører ikke hjemme i filer.
+func setConfigProvider(configPath, prov, model, baseURL string) {
+	_ = os.MkdirAll(filepath.Dir(configPath), 0755)
+	raw := map[string]any{}
+	if data, err := os.ReadFile(configPath); err == nil {
+		_ = yaml.Unmarshal(data, &raw)
+	}
+	raw["provider"] = prov
+	raw["model"] = model
+	if baseURL != "" {
+		raw["base_url"] = baseURL
+	} else {
+		delete(raw, "base_url")
+	}
+	delete(raw, "api_key")
+	data, _ := yaml.Marshal(raw)
+	_ = os.WriteFile(configPath, data, 0600)
 }
 
 func loadEkteMd(dir string) string {
