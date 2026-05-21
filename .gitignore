@@ -10,6 +10,10 @@ vendor/
 # Secrets
 .env
 .ekte/config.yaml
+*.bak
+
+# Personligt (navn, agentnavn)
+.ekte/profile.yaml
 
 # Wiki (global wiki er ikke en del af projekt-repo)
 .ekte/wiki/
