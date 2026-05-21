@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/danskode/ekte/internal/agent"
 	"github.com/danskode/ekte/internal/provider"
@@ -19,6 +20,7 @@ const (
 	critThreshold  = 0.90
 	toolPanelWidth = 40
 )
+
 
 type Model struct {
 	width, height int
@@ -34,6 +36,15 @@ type Model struct {
 	historyIdx        int
 	savedDraft        string
 	pendingShiftEnter bool
+
+	bannerContent    string
+	forrestenPending bool
+	userName         string
+	agentName        string
+	mdRenderer       *glamour.TermRenderer
+
+	suggestions   []string
+	suggestionIdx int
 
 	streaming bool
 	streamBuf string
@@ -59,10 +70,11 @@ func New(a *agent.Agent) Model {
 	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
 
 	return Model{
-		agent:      a,
-		input:      ta,
-		spinner:    sp,
-		historyIdx: -1,
+		agent:         a,
+		input:         ta,
+		spinner:       sp,
+		historyIdx:    -1,
+		suggestionIdx: -1,
 	}
 }
 
@@ -79,6 +91,63 @@ func (m *Model) AddWarning(msg string) {
 		Role:    "system",
 		Content: styleError.Render(msg),
 	})
+}
+
+func newMdRenderer(width int) *glamour.TermRenderer {
+	r, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return nil
+	}
+	return r
+}
+
+func (m *Model) SetNames(userName, agentName string) {
+	m.userName = userName
+	m.agentName = agentName
+}
+
+func (m Model) msgHeader(rendered string, w int) string {
+	labelW := lipgloss.Width(rendered)
+	ruleW := w - labelW - 1
+	if ruleW < 0 {
+		ruleW = 0
+	}
+	rule := lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", ruleW))
+	return rendered + " " + rule
+}
+
+func (m *Model) ShowBanner() {
+	letterRows := [][]string{
+		{"██████████", "██        ", "████████  ", "██        ", "██████████"}, // E
+		{"██      ██", "██    ██  ", "██████    ", "██    ██  ", "██      ██"}, // K
+		{"██████████", "    ██    ", "    ██    ", "    ██    ", "    ██    "}, // T
+		{"██████████", "██        ", "████████  ", "██        ", "██████████"}, // E
+	}
+	colors := []lipgloss.Color{
+		lipgloss.Color("219"),
+		lipgloss.Color("213"),
+		lipgloss.Color("177"),
+		lipgloss.Color("135"),
+	}
+
+	var sb strings.Builder
+	for row := 0; row < 5; row++ {
+		for i, letter := range letterRows {
+			style := lipgloss.NewStyle().Foreground(colors[i]).Bold(true)
+			sb.WriteString(style.Render(letter[row]))
+			if i < len(letterRows)-1 {
+				sb.WriteString("    ")
+			}
+		}
+		sb.WriteString("\n")
+	}
+	subtitleStyle := lipgloss.NewStyle().Foreground(colorSubtle)
+	sb.WriteString(subtitleStyle.Render("et agent harness med fokus på spec driven development"))
+
+	m.bannerContent = sb.String()
 }
 
 func (m *Model) SetWelcome(projectName string) {
@@ -102,18 +171,54 @@ func (m Model) conversationContent() string {
 		w = 80
 	}
 	var sb strings.Builder
+	if m.bannerContent != "" {
+		sb.WriteString(m.bannerContent + "\n\n")
+	}
+	renderMd := func(s string) string {
+		if m.mdRenderer == nil {
+			return wordWrap(s, w)
+		}
+		out, err := m.mdRenderer.Render(s)
+		if err != nil || strings.TrimSpace(out) == "" {
+			return wordWrap(s, w)
+		}
+		return strings.TrimRight(out, "\n")
+	}
+
+	userName := m.userName
+	if userName == "" {
+		userName = "Dig"
+	}
+	agentName := m.agentName
+	if agentName == "" {
+		agentName = "Ekte"
+	}
+
 	for _, msg := range m.messages {
 		switch msg.Role {
 		case "user":
-			sb.WriteString(styleUser.Render("Du") + "\n" + wordWrap(msg.Content, w) + "\n\n")
+			header := m.msgHeader(styleUser.Render("👤 "+userName), w)
+			body := styleUserBody.Render(wordWrap(msg.Content, w-2))
+			sb.WriteString(header + "\n" + body + "\n\n")
 		case "assistant":
-			sb.WriteString(styleAssistant.Render("ekte") + "\n" + wordWrap(msg.Content, w) + "\n\n")
+			header := m.msgHeader(styleAssistantLabel.Render("🤖 "+agentName), w)
+			sb.WriteString(header + "\n" + renderMd(msg.Content) + "\n\n")
 		case "system":
-			sb.WriteString(styleSystem.Render("● "+wordWrap(msg.Content, w)) + "\n\n")
+			sb.WriteString(styleSystem.Render("◦ "+wordWrap(msg.Content, w)) + "\n\n")
+		case "forresten":
+			header := m.msgHeader(styleForrestenLabel.Render("💬 forresten"), w)
+			sb.WriteString(header + "\n" + renderMd(msg.Content) + "\n\n")
 		}
 	}
-	if m.streaming {
-		sb.WriteString(styleAssistant.Render("ekte") + "\n" + wordWrap(m.streamBuf, w) + "▌\n\n")
+	if m.forrestenPending {
+		sb.WriteString(styleForrestenLabel.Render("💬 forresten") + " " +
+			lipgloss.NewStyle().Foreground(colorBorder).Render("────") + "  " +
+			styleSystem.Render("venter...") + "\n\n")
+	}
+	if m.streaming && m.streamBuf != "" {
+		header := m.msgHeader(styleAssistantLabel.Render("🤖 "+agentName), w)
+		body := styleAssistantBody.Render(wordWrap(m.streamBuf, w)) + "▌"
+		sb.WriteString(header + "\n" + body + "\n\n")
 	}
 	return sb.String()
 }
@@ -205,7 +310,10 @@ func (m Model) View() string {
 		convView = styleBorder.Width(convW - 2).Height(panelH - 2).Render(m.conversation.View())
 		m.toolPanel.Width = toolPanelWidth - 2
 		m.toolPanel.Height = panelH - 2
-		toolView = styleBorder.Width(toolPanelWidth - 2).Height(panelH - 2).Render(m.toolPanel.View())
+		hint := styleSystem.Render("PgUp/PgDn: scroll · Esc: luk")
+		toolView = styleBorder.Width(toolPanelWidth - 2).Height(panelH - 2).
+			BorderTopForeground(colorSubtle).
+			Render(m.toolPanel.View() + "\n\n" + hint)
 	} else {
 		m.conversation.Width = m.width - 2
 		m.conversation.Height = panelH - 2
@@ -219,11 +327,61 @@ func (m Model) View() string {
 		panels = convView
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	parts := []string{
 		panels,
-		styleActiveBorder.Width(m.width-2).Render(m.input.View()),
-		m.statusBar(),
-	)
+		styleActiveBorder.Width(m.width - 2).Render(m.input.View()),
+	}
+	if sugg := m.renderSuggestions(); sugg != "" {
+		parts = append(parts, sugg)
+	}
+	parts = append(parts, m.statusBar())
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+func (m *Model) updateSuggestions() {
+	val := m.input.Value()
+	if !strings.HasPrefix(val, "/") || strings.ContainsRune(val, ' ') {
+		m.suggestions = nil
+		m.suggestionIdx = -1
+		return
+	}
+	query := strings.ToLower(val)
+	var matches []string
+	if m.agent != nil {
+		for _, cmd := range m.agent.Commands() {
+			if strings.HasPrefix(strings.ToLower(cmd), query) && cmd != val {
+				matches = append(matches, cmd)
+			}
+		}
+	}
+	m.suggestions = matches
+	if m.suggestionIdx >= len(matches) {
+		m.suggestionIdx = -1
+	}
+}
+
+func (m Model) renderSuggestions() string {
+	if len(m.suggestions) == 0 {
+		return ""
+	}
+	dimStyle := lipgloss.NewStyle().Foreground(colorSubtle)
+	activeStyle := lipgloss.NewStyle().Foreground(colorAccent)
+	hintStyle := lipgloss.NewStyle().Foreground(colorBorder)
+
+	var sb strings.Builder
+	sb.WriteString("  ")
+	for i, s := range m.suggestions {
+		if i == m.suggestionIdx {
+			sb.WriteString(activeStyle.Render(s))
+		} else {
+			sb.WriteString(dimStyle.Render(s))
+		}
+		if i < len(m.suggestions)-1 {
+			sb.WriteString("  ")
+		}
+	}
+	sb.WriteString("  " + hintStyle.Render("tab · ↑↓"))
+	return sb.String()
 }
 
 func (m *Model) appendSystem(content string) {

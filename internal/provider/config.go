@@ -17,6 +17,7 @@ type WikiConfig struct {
 type WhitelistConfig struct {
 	GitWorktree bool `yaml:"git_worktree"` // /spec opret/merge/fjern
 	WikiWrite   bool `yaml:"wiki_write"`   // /wiki gem
+	WikiFetch   bool `yaml:"wiki_fetch"`   // /wiki-get hent URL-indhold
 	HookRun     bool `yaml:"hook_run"`     // /hook <navn>
 	FileRead    bool `yaml:"file_read"`    // LLM må læse filer
 	FileWrite   bool `yaml:"file_write"`   // LLM må skrive/oprette filer

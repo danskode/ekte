@@ -89,6 +89,18 @@ func (w *Wiki) SavePage(pageType, title, content string) (string, error) {
 	return rel, nil
 }
 
+// SaveRaw gemmer markdown-indhold direkte på den angivne relative sti under wiki-roden.
+func (w *Wiki) SaveRaw(relPath, content string) (string, error) {
+	full := filepath.Join(w.root, relPath)
+	if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(full, []byte(content), 0644); err != nil {
+		return "", err
+	}
+	return relPath, nil
+}
+
 func (w *Wiki) readIndex() (string, error) {
 	data, err := os.ReadFile(filepath.Join(w.root, "wiki", "index.md"))
 	if err != nil {
@@ -119,7 +131,7 @@ func (w *Wiki) search(keywords string) ([]string, error) {
 
 // grepSearch er fallback hvis search.sh ikke eksisterer.
 func (w *Wiki) grepSearch(keywords string) []string {
-	wikiDir := filepath.Join(w.root, "wiki")
+	wikiDir := w.root
 	var results []string
 	words := strings.Fields(keywords)
 	if len(words) == 0 {
@@ -135,9 +147,9 @@ func (w *Wiki) grepSearch(keywords string) []string {
 			return nil
 		}
 		lower := strings.ToLower(string(data))
-		for _, w := range words {
-			if strings.Contains(lower, strings.ToLower(w)) {
-				rel := strings.TrimPrefix(path, w+"/")
+		for _, kw := range words {
+			if strings.Contains(lower, strings.ToLower(kw)) {
+				rel := strings.TrimPrefix(path, w.root+"/")
 				results = append(results, rel)
 				break
 			}

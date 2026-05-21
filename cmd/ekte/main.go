@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -85,12 +86,20 @@ func runTUI() {
 		Skills:     skills,
 		Wiki:       wikiInst,
 		RepoRoot:   repoRoot,
+		WorkDir:    cwd,
 		SessionDir: filepath.Join(".ekte", "sessions"),
 		Whitelist:  whitelist,
 		Hooks:      hooks,
 	})
 
+	profile := loadProfile()
+	if profile.UserName == "" || profile.AgentName == "" {
+		profile = promptProfile()
+		saveProfile(profile)
+	}
+
 	m := tui.New(a)
+	m.SetNames(profile.UserName, profile.AgentName)
 
 	if provider.KeyInFile(configPath) {
 		m.AddWarning("⚠  API-nøgle fundet i .ekte/config.yaml — flyt den til env-variabel:\nexport ANTHROPIC_API_KEY=\"din-nøgle\"  (tilføj til ~/.bashrc)")
@@ -103,6 +112,7 @@ func runTUI() {
 		}
 	}
 
+	m.ShowBanner()
 	if isFirstRun {
 		m.SetWelcome(welcomeName)
 	}
@@ -112,6 +122,49 @@ func runTUI() {
 		fmt.Fprintf(os.Stderr, "fejl: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+type ekteProfile struct {
+	UserName  string `yaml:"user_name"`
+	AgentName string `yaml:"agent_name"`
+}
+
+func loadProfile() ekteProfile {
+	data, err := os.ReadFile(filepath.Join(".ekte", "profile.yaml"))
+	if err != nil {
+		return ekteProfile{}
+	}
+	var p ekteProfile
+	_ = yaml.Unmarshal(data, &p)
+	return p
+}
+
+func saveProfile(p ekteProfile) {
+	data, _ := yaml.Marshal(p)
+	_ = os.WriteFile(filepath.Join(".ekte", "profile.yaml"), data, 0644)
+}
+
+func promptProfile() ekteProfile {
+	reader := bufio.NewReader(os.Stdin)
+	bold := "\033[1m"
+	reset := "\033[0m"
+
+	fmt.Printf("\n%s👤 Hvad vil du kaldes?%s (Enter = Dig) > ", bold, reset)
+	userName, _ := reader.ReadString('\n')
+	userName = strings.TrimSpace(userName)
+	if userName == "" {
+		userName = "Dig"
+	}
+
+	fmt.Printf("%s🤖 Hvad skal din agent hedde?%s (Enter = Ekte) > ", bold, reset)
+	agentName, _ := reader.ReadString('\n')
+	agentName = strings.TrimSpace(agentName)
+	if agentName == "" {
+		agentName = "Ekte"
+	}
+
+	fmt.Println()
+	return ekteProfile{UserName: userName, AgentName: agentName}
 }
 
 func loadEkteMd(dir string) string {

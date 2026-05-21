@@ -29,18 +29,22 @@ const (
 	EventToolOutput                  // output til tool-panel
 	EventStreamToken                 // streaming: et token fra LLM
 	EventStreamDone                  // streaming: fuldt svar klar (Content = hele teksten)
+	EventForresten                   // svar fra /forresten subagent
 )
 
 type Event struct {
 	Type    EventType
 	Content string
 	Tokens  int
+	Prefill string // hvis sat, pre-udfyld inputfeltet i TUI
+	Source  string // wiki-kilde, vises efter svaret
 }
 
 type Config struct {
 	Provider   provider.Provider
 	Wiki       *wiki.Wiki
 	RepoRoot   string
+	WorkDir    string // rod for filoperationer — altid cwd ved opstart
 	SessionDir string
 	Skills     []skill.Skill
 	Whitelist  provider.WhitelistConfig
@@ -48,13 +52,15 @@ type Config struct {
 }
 
 type Agent struct {
-	cfg            Config
-	messages       []provider.Message
-	forrestenHist  []provider.Message
-	activeSkill    *skill.Skill
-	sessions       []session.Session
+	cfg             Config
+	messages        []provider.Message
+	forrestenHist   []provider.Message
+	activeSkill     *skill.Skill
+	sessions        []session.Session
 	pendingWikiSave string
-	tokenCount     int
+	pendingWikiFetch string // indhold fra /wiki-get, klar til /wiki-gem
+	pendingWikiPath  string // foreslået sti fra /wiki-get
+	tokenCount      int
 }
 
 func New(cfg Config) *Agent {
@@ -67,6 +73,18 @@ func (a *Agent) ActiveSkill() *skill.Skill           { return a.activeSkill }
 func (a *Agent) TokenCount() int                     { return a.tokenCount }
 func (a *Agent) Sessions() []session.Session         { return a.sessions }
 func (a *Agent) PendingWikiSave() string             { return a.pendingWikiSave }
+
+func (a *Agent) Commands() []string {
+	builtin := []string{
+		"/hjælp", "/clear", "/compress", "/spec", "/wiki", "/wiki-get", "/wiki-gem",
+		"/forresten", "/hook", "/skills", "/dep", "/sec-check",
+		"/resume", "/exit",
+	}
+	for _, s := range a.cfg.Skills {
+		builtin = append(builtin, "/"+s.Name)
+	}
+	return builtin
+}
 
 func (a *Agent) AddContext(role, content string) {
 	a.messages = append(a.messages, provider.Message{Role: role, Content: content})
@@ -121,6 +139,10 @@ func (a *Agent) ProcessStream(ctx context.Context, input string) <-chan Event {
 		if input == "" {
 			return
 		}
+		if strings.HasPrefix(input, "/wiki-get") {
+			a.handleWikiGet(ctx, strings.TrimSpace(strings.TrimPrefix(input, "/wiki-get")), ch)
+			return
+		}
 		if strings.HasPrefix(input, "/") {
 			for _, ev := range a.handleSlash(ctx, input) {
 				ch <- ev
@@ -143,8 +165,26 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 	msgs := a.messagesWithSkill()
 	a.clearSkill()
 
+	// Injicér wiki som autoritativ kilde — skal altid prioriteres over generel viden
+	var wikiSource string
+	if a.cfg.Wiki != nil {
+		_, pages, err := a.cfg.Wiki.Query(input)
+		if err == nil && len(pages) > 0 {
+			var ctxBuilder strings.Builder
+			var paths []string
+			ctxBuilder.WriteString("VIGTIG INSTRUKTION: Følgende wiki-sider er projektets kilde til sandhed.\n")
+			ctxBuilder.WriteString("Kodestandarder, arkitektur og ønsker herfra SKAL følges og prioriteres over generel viden.\n\n")
+			for _, p := range pages {
+				ctxBuilder.WriteString(fmt.Sprintf("=== %s ===\n%s\n\n", p.Path, p.Content))
+				paths = append(paths, p.Path)
+			}
+			msgs = append([]provider.Message{{Role: "system", Content: ctxBuilder.String()}}, msgs...)
+			wikiSource = "📚 " + strings.Join(paths, " · ")
+		}
+	}
+
 	toolDefs := tools.Definitions(a.cfg.Whitelist.FileRead, a.cfg.Whitelist.FileWrite)
-	workdir := a.cfg.RepoRoot
+	workdir := a.cfg.WorkDir
 	if workdir == "" {
 		workdir, _ = os.Getwd()
 	}
@@ -164,7 +204,7 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 				// Intet tool call — vis svar og afslut
 				a.messages = append(a.messages, provider.Message{Role: "assistant", Content: resp.Content})
 				a.tokenCount = estimateTokens(a.messages)
-				ch <- Event{Type: EventStreamDone, Content: resp.Content}
+				ch <- Event{Type: EventStreamDone, Content: resp.Content, Source: wikiSource}
 				ch <- Event{Type: EventTokenCount, Tokens: a.tokenCount}
 				return
 			}
@@ -213,7 +253,7 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 
 		a.messages = append(a.messages, provider.Message{Role: "assistant", Content: full})
 		a.tokenCount = estimateTokens(a.messages)
-		ch <- Event{Type: EventStreamDone, Content: full}
+		ch <- Event{Type: EventStreamDone, Content: full, Source: wikiSource}
 		ch <- Event{Type: EventTokenCount, Tokens: a.tokenCount}
 		return
 	}
@@ -244,6 +284,9 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 
 	case "/wiki":
 		return a.handleWiki(ctx, arg)
+
+	case "/wiki-gem":
+		return a.handleWikiGem(arg)
 
 	case "/forresten":
 		if arg == "" {
@@ -386,7 +429,7 @@ func (a *Agent) handleWiki(ctx context.Context, arg string) []Event {
 		return []Event{{Type: EventSystem, Content: "✓ Gemt i wiki: " + path}}
 	}
 
-	wikiCtx, _, err := a.cfg.Wiki.Query(arg)
+	wikiCtx, pages, err := a.cfg.Wiki.Query(arg)
 	if err != nil {
 		return []Event{{Type: EventError, Content: "Wiki-fejl: " + err.Error()}}
 	}
@@ -396,7 +439,17 @@ func (a *Agent) handleWiki(ctx context.Context, arg string) []Event {
 	if err != nil {
 		return []Event{{Type: EventError, Content: err.Error()}}
 	}
-	return []Event{{Type: EventAssistant, Content: resp.Content}}
+	var source string
+	if len(pages) > 0 {
+		var paths []string
+		for _, p := range pages {
+			paths = append(paths, p.Path)
+		}
+		source = strings.Join(paths, " · ")
+	}
+	return []Event{
+		{Type: EventAssistant, Content: resp.Content, Source: source},
+	}
 }
 
 func (a *Agent) handleForresten(ctx context.Context, arg string) []Event {
@@ -409,7 +462,7 @@ func (a *Agent) handleForresten(ctx context.Context, arg string) []Event {
 	a.pendingWikiSave = resp.Content
 
 	events := []Event{
-		{Type: EventAssistant, Content: "forresten → " + resp.Content},
+		{Type: EventForresten, Content: resp.Content},
 	}
 	if a.cfg.Wiki != nil {
 		events = append(events, Event{
@@ -506,6 +559,125 @@ func renderWorktreeList(wts []git.Worktree) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
+func (a *Agent) handleWikiGem(customPath string) []Event {
+	if a.pendingWikiFetch == "" {
+		return []Event{{Type: EventSystem, Content: "Ingen wiki-indhold klar. Kør /wiki-get <url> først."}}
+	}
+	if !a.cfg.Whitelist.WikiWrite {
+		return []Event{{Type: EventSystem, Content: denyMsg("wiki_write")}}
+	}
+	if a.cfg.Wiki == nil {
+		return []Event{{Type: EventSystem, Content: "Wiki er ikke aktiveret i config."}}
+	}
+
+	targetPath := customPath
+	if targetPath == "" {
+		targetPath = a.pendingWikiPath
+	}
+	if targetPath == "" {
+		return []Event{{Type: EventSystem, Content: "Angiv en sti: /wiki-gem concepts/emne.md"}}
+	}
+
+	savedPath, err := a.cfg.Wiki.SaveRaw(targetPath, a.pendingWikiFetch)
+	if err != nil {
+		return []Event{{Type: EventError, Content: "Kunne ikke gemme: " + err.Error()}}
+	}
+
+	a.pendingWikiFetch = ""
+	a.pendingWikiPath = ""
+	return []Event{{Type: EventSystem, Content: "✓ Gemt: " + savedPath}}
+}
+
+func (a *Agent) handleWikiGet(ctx context.Context, rawURL string, ch chan<- Event) {
+	if !a.cfg.Whitelist.WikiFetch {
+		ch <- Event{Type: EventSystem, Content: denyMsg("wiki_fetch")}
+		return
+	}
+	if rawURL == "" {
+		ch <- Event{Type: EventSystem, Content: "Brug: /wiki-get <url>"}
+		return
+	}
+
+	ch <- Event{Type: EventSystem, Content: "↓ Henter " + rawURL + "..."}
+
+	content, err := tools.FetchURL(rawURL)
+	if err != nil {
+		ch <- Event{Type: EventError, Content: "Kunne ikke hente URL: " + err.Error()}
+		return
+	}
+
+	ch <- Event{Type: EventSystem, Content: fmt.Sprintf("✓ %d tegn hentet — analyserer...", len(content))}
+
+	wikiCtx := ""
+	if a.cfg.Wiki != nil {
+		wikiCtx = "\nMin wiki er aktiveret."
+	}
+
+	prompt := fmt.Sprintf(`Analyser dette webindhold og hjælp mig med at tilføje det til min wiki.
+URL: %s%s
+
+Indhold:
+%s
+
+Svar i præcis dette format:
+- Første linje: kun den foreslåede wiki-filsti, fx: concepts/emne.md
+- Anden linje: tom
+- Tredje linje og frem: opsummering (2-3 sætninger) efterfulgt af det komplette wiki-indlæg i markdown på dansk`, rawURL, wikiCtx, content)
+
+	if a.cfg.Provider == nil {
+		ch <- Event{Type: EventError, Content: "Ingen LLM konfigureret."}
+		return
+	}
+
+	msgs := append(a.messages, provider.Message{Role: "user", Content: prompt})
+	tokenCh, err := a.cfg.Provider.Stream(ctx, msgs)
+	if err != nil {
+		ch <- Event{Type: EventError, Content: err.Error()}
+		return
+	}
+
+	var full strings.Builder
+	for tok := range tokenCh {
+		ch <- Event{Type: EventStreamToken, Content: tok}
+		full.WriteString(tok)
+	}
+
+	response := full.String()
+	suggestedPath, body := parseWikiGetResponse(response)
+	a.pendingWikiFetch = body
+	a.pendingWikiPath = suggestedPath
+
+	if suggestedPath != "" {
+		ch <- Event{
+			Type:    EventSystem,
+			Content: fmt.Sprintf("Foreslået sti: %s — tryk Enter for at gemme", suggestedPath),
+			Prefill: "/wiki-gem " + suggestedPath,
+		}
+	} else {
+		ch <- Event{Type: EventSystem, Content: "Skriv /wiki-gem <sti> for at gemme, fx /wiki-gem concepts/emne.md"}
+	}
+
+	ch <- Event{Type: EventStreamDone, Content: response}
+}
+
+func parseWikiGetResponse(s string) (path, body string) {
+	lines := strings.SplitN(s, "\n", 3)
+	if len(lines) == 0 {
+		return "", s
+	}
+	first := strings.TrimSpace(lines[0])
+	if strings.Contains(first, ".md") && !strings.Contains(first, " ") {
+		body = ""
+		if len(lines) >= 3 {
+			body = strings.TrimSpace(lines[2])
+		} else if len(lines) == 2 {
+			body = strings.TrimSpace(lines[1])
+		}
+		return first, body
+	}
+	return "", s
+}
+
 func (a *Agent) handleDep(ctx context.Context, module string) []Event {
 	sc := dep.Check(ctx, module)
 	return []Event{{Type: EventToolOutput, Content: sc.Render()}}
@@ -514,7 +686,9 @@ func (a *Agent) handleDep(ctx context.Context, module string) []Event {
 func (a *Agent) handleDeps(ctx context.Context) []Event {
 	var sections []string
 
-	// Projektets go.mod
+	legend := "✓ ingen kendte CVEer\n⚠ sårbarhed fundet\n? ikke i OSV-database\n"
+
+	// Projektets go.mod — listen over alle tredjepartspakker projektet bruger
 	gomodPath := "go.mod"
 	if a.cfg.RepoRoot != "" {
 		gomodPath = filepath.Join(a.cfg.RepoRoot, "go.mod")
@@ -523,7 +697,7 @@ func (a *Agent) handleDeps(ctx context.Context) []Event {
 	if err == nil && len(projectMods) > 0 {
 		scores := dep.CheckAll(ctx, projectMods)
 		sections = append(sections, dep.RenderReport(
-			fmt.Sprintf("Projekt (%d moduler)", len(projectMods)), scores,
+			fmt.Sprintf("Dit projekt — %d pakker fra go.mod", len(projectMods)), scores,
 		))
 	} else if err != nil {
 		sections = append(sections, "Ingen go.mod fundet i projektet.")
@@ -534,7 +708,7 @@ func (a *Agent) handleDeps(ctx context.Context) []Event {
 	if len(ekteMods) > 0 {
 		ekteScores := dep.CheckAll(ctx, ekteMods)
 		sections = append(sections, dep.RenderReport(
-			fmt.Sprintf("ekte-harness (%d moduler)", len(ekteMods)), ekteScores,
+			fmt.Sprintf("ekte selv — %d pakker", len(ekteMods)), ekteScores,
 		))
 	}
 
@@ -542,9 +716,9 @@ func (a *Agent) handleDeps(ctx context.Context) []Event {
 		return []Event{{Type: EventSystem, Content: "Ingen afhængigheder fundet."}}
 	}
 
-	output := strings.Join(sections, "\n\n────────────────────────\n\n")
+	output := legend + "\n" + strings.Join(sections, "\n\n────────────────────────\n\n")
 	return []Event{
-		{Type: EventSystem, Content: fmt.Sprintf("Tjekker afhængigheder... (%d + %d moduler)", len(projectMods), len(dep.EkteDeps()))},
+		{Type: EventSystem, Content: fmt.Sprintf("Tjekker %d moduler...", len(projectMods)+len(dep.EkteDeps()))},
 		{Type: EventToolOutput, Content: output},
 	}
 }
