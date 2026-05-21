@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/danskode/ekte/internal/skill"
 )
 
 type Result struct {
@@ -79,9 +81,10 @@ func Run(dir string) (Result, error) {
 
 	// 5. Wiki
 	fmt.Println()
-	fmt.Println("Wiki")
-	fmt.Println("────")
+	fmt.Println("Wiki — Simple Minded")
+	fmt.Println("────────────────────")
 	fmt.Println("En personlig wiki samler din viden på tværs af projekter.")
+	fmt.Println("Agenterne trækker automatisk på wikien når den er relevant.")
 	if ask(r, "Vil du sætte en wiki op?") {
 		wikiPath := runWikiSetup(r, dir)
 		if wikiPath != "" {
@@ -90,6 +93,18 @@ func Run(dir string) (Result, error) {
 		}
 	} else {
 		fmt.Println("  Du kan altid sætte det op senere med 'ekte init'.")
+	}
+
+	// 6. SKILLeton
+	fmt.Println()
+	fmt.Println("Skills — SKILLeton")
+	fmt.Println("──────────────────")
+	fmt.Println("SKILLeton er et åbent bibliotek af skills til ekte.")
+	fmt.Println("En skill tilføjer et system-prompt til næste LLM-besked — gælder kun ét prompt.")
+	if ask(r, "Vil du vælge skills fra SKILLeton?") {
+		runSkillCatalog(r, filepath.Join(dir, ".ekte", "skills"))
+	} else {
+		fmt.Println("  Du kan tilføje skills senere med '/skills catalog' i ekte.")
 	}
 
 	fmt.Println()
@@ -255,13 +270,78 @@ func runWikiSetup(r *bufio.Reader, dir string) string {
 			return ""
 		}
 	} else {
-		fmt.Println("   Kloner wiki-template...")
-		if err := cloneWiki("https://github.com/danskode/simple-wiki.git", wikiPath); err != nil {
+		fmt.Println("   Kloner Simple Minded wiki-template...")
+		if err := cloneWiki("https://github.com/danskode/simple-minded.git", wikiPath); err != nil {
 			fmt.Printf("   ⚠  Kunne ikke klone template: %v\n", err)
 			return ""
 		}
 	}
 	return wikiPath
+}
+
+func runSkillCatalog(r *bufio.Reader, skillsDir string) {
+	fmt.Println("   Henter katalog fra SKILLeton...")
+	cat, err := skill.FetchCatalog()
+	if err != nil {
+		fmt.Printf("   ⚠  Kunne ikke hente katalog: %v\n", err)
+		fmt.Println("   Prøv igen med '/skills catalog' i ekte.")
+		return
+	}
+
+	installed := skill.InstalledNames(skillsDir)
+
+	fmt.Println()
+	for i, s := range cat.Skills {
+		marker := "  "
+		if installed[s.Name] {
+			marker = "✓ "
+		}
+		fmt.Printf("   %s%d. %-20s %s\n", marker, i+1, s.Name, s.Description)
+	}
+	fmt.Println()
+	fmt.Println("   Vælg med numre adskilt af komma, fx: 1,3")
+	fmt.Println("   Enter = spring over")
+	fmt.Print("   → ")
+	input := strings.TrimSpace(readLine(r))
+	if input == "" {
+		fmt.Println("   Springer over. Brug '/skills catalog' i ekte for at tilføje senere.")
+		return
+	}
+
+	count := 0
+	for _, idx := range parseChoices(input, len(cat.Skills)) {
+		entry := cat.Skills[idx]
+		if installed[entry.Name] {
+			fmt.Printf("   ✓ %s allerede installeret\n", entry.Name)
+			continue
+		}
+		if err := skill.DownloadSkill(entry, skillsDir); err != nil {
+			fmt.Printf("   ⚠  %s: %v\n", entry.Name, err)
+			continue
+		}
+		fmt.Printf("   ✓ %s installeret\n", entry.Name)
+		count++
+	}
+	if count > 0 {
+		fmt.Printf("   %d skill(s) installeret i .ekte/skills/\n", count)
+	}
+}
+
+func parseChoices(input string, max int) []int {
+	var result []int
+	seen := map[int]bool{}
+	for _, part := range strings.Split(input, ",") {
+		var n int
+		if _, err := fmt.Sscanf(strings.TrimSpace(part), "%d", &n); err != nil {
+			continue
+		}
+		idx := n - 1
+		if idx >= 0 && idx < max && !seen[idx] {
+			seen[idx] = true
+			result = append(result, idx)
+		}
+	}
+	return result
 }
 
 func cloneWiki(url, dest string) error {
