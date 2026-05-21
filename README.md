@@ -3,6 +3,14 @@
 En personlig AI-assistent til softwareudvikling, bygget som et Go TUI-program.
 Køres direkte i terminalen — ingen browser, ingen cloud-dashboard.
 
+## Installation
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danskode/ekte/main/install.sh | sh
+```
+
+Kræver: `git`, `curl` eller `wget`. Installerer til `~/.local/bin` — ingen sudo, ingen pakkemanager.
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ ekte                                    /hjælp           │
