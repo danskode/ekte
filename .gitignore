@@ -27,8 +27,8 @@ vendor/
 # Diagnostik
 cmd/keytest/
 
-# Projektfiler
-ekte-session-prompt.md
+# Udviklingsnoter (lokal, deles ikke — ekte-session-prompt.md og al kontekst herunder)
+.dev/
 
 # OS
 .DS_Store
