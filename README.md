@@ -67,12 +67,14 @@ Ved første kørsel guides du igennem en kort onboarding:
 
 1. **Tillid** — bekræft at du stoler på mappen
 2. **Projektbeskrivelse** — besvar et par spørgsmål om projektet; svaret gemmes som `ekte.md`
-3. **LLM-opsætning** — vælg provider (Anthropic/OpenAI/Ollama) og sæt API-nøglen som miljøvariabel
-4. **Wiki** — valgfrit: sæt en personlig wiki op til videndeling på tværs af projekter
+3. **Navn** — hvad vil du kaldes, og hvad skal din agent hedde?
+4. **API-opsætning** — vælg provider interaktivt; ekte forklarer præcis hvad du skal gøre
+5. **Wiki** — valgfrit: sæt en personlig wiki op til videndeling på tværs af projekter
 
 ### API-nøgle
 
-ekte gemmer **aldrig** API-nøgler i config-filen. Sæt nøglen som miljøvariabel:
+ekte gemmer **aldrig** API-nøgler i config-filen — kun i miljøvariabler.
+Nøgler i filer risikerer at lække via git-historik.
 
 ```bash
 # Anthropic
@@ -81,7 +83,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 # OpenAI
 export OPENAI_API_KEY="sk-..."
 
-# Tilføj til ~/.bashrc eller ~/.zshrc så den huskes
+# Tilføj til ~/.bashrc eller ~/.zshrc så den huskes permanent
 ```
 
 ### Lokal model (Ollama)
@@ -90,7 +92,7 @@ export OPENAI_API_KEY="sk-..."
 ollama pull llama3.2
 ```
 
-Konfigurer `base_url` i `.ekte/config.yaml`:
+Vælg "Lokal Ollama" i API-guiden, eller konfigurer manuelt i `.ekte/config.yaml`:
 
 ```yaml
 provider: openai
@@ -109,7 +111,7 @@ Konfigurationen ligger i `.ekte/config.yaml` i projektmappen. Filen oprettes aut
 ```yaml
 # LLM-provider: "anthropic" eller "openai" (bruges også til Ollama/LM Studio)
 provider: anthropic
-model: claude-opus-4-5
+model: claude-sonnet-4-6
 
 # Lokal model — udelad base_url for cloud-providers
 base_url: ""
@@ -326,7 +328,7 @@ ekte/
 │       ├── wiki.go            # Query, SavePage, grepSearch
 │       └── init.go            # wiki-opsætning ved onboarding
 │
-├── specs/                     # designdokumenter for ekte selv
+├── specs/                     # feature-specs (én per feature — driver worktree-workflow)
 ├── go.mod
 └── README.md
 ```
