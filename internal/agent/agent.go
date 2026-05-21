@@ -326,8 +326,14 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 }
 
 func (a *Agent) handleSkills(arg string) []Event {
+	if arg == "catalog" {
+		return a.handleSkillsCatalog()
+	}
+	if strings.HasPrefix(arg, "install ") {
+		return a.handleSkillsInstall(strings.TrimPrefix(arg, "install "))
+	}
 	if len(a.cfg.Skills) == 0 {
-		return []Event{{Type: EventSystem, Content: "Ingen skills fundet i .ekte/skills/"}}
+		return []Event{{Type: EventSystem, Content: "Ingen skills installeret endnu.\nBrug '/skills catalog' for at se hvad der er tilgængeligt i SKILLeton."}}
 	}
 	if arg != "" {
 		for i := range a.cfg.Skills {
@@ -336,9 +342,55 @@ func (a *Agent) handleSkills(arg string) []Event {
 				return []Event{{Type: EventSystem, Content: "✓ Skill aktiveret: " + arg + " (gælder for næste prompt)"}}
 			}
 		}
-		return []Event{{Type: EventSystem, Content: "Skill ikke fundet: " + arg}}
+		return []Event{{Type: EventSystem, Content: "Skill ikke fundet: " + arg + "\nBrug '/skills' for at se installerede skills."}}
 	}
 	return []Event{{Type: EventSystem, Content: renderSkillsList(a.cfg.Skills)}}
+}
+
+func (a *Agent) handleSkillsCatalog() []Event {
+	cat, err := skill.FetchCatalog()
+	if err != nil {
+		return []Event{{Type: EventError, Content: "Kunne ikke hente SKILLeton-katalog: " + err.Error()}}
+	}
+
+	skillsDir := filepath.Join(a.cfg.WorkDir, ".ekte", "skills")
+	installed := skill.InstalledNames(skillsDir)
+
+	var sb strings.Builder
+	sb.WriteString("SKILLeton — tilgængelige skills\n\n")
+	for _, s := range cat.Skills {
+		marker := "  "
+		if installed[s.Name] {
+			marker = "✓ "
+		}
+		sb.WriteString(fmt.Sprintf("%s%-20s %s\n", marker, s.Name, s.Description))
+	}
+	sb.WriteString("\nInstallér med: /skills install <navn>")
+	return []Event{{Type: EventSystem, Content: sb.String()}}
+}
+
+func (a *Agent) handleSkillsInstall(name string) []Event {
+	if name == "" {
+		return []Event{{Type: EventSystem, Content: "Brug: /skills install <navn>"}}
+	}
+	cat, err := skill.FetchCatalog()
+	if err != nil {
+		return []Event{{Type: EventError, Content: "Kunne ikke hente SKILLeton-katalog: " + err.Error()}}
+	}
+
+	skillsDir := filepath.Join(a.cfg.WorkDir, ".ekte", "skills")
+	for _, entry := range cat.Skills {
+		if entry.Name == name {
+			if skill.InstalledNames(skillsDir)[name] {
+				return []Event{{Type: EventSystem, Content: "✓ " + name + " er allerede installeret"}}
+			}
+			if err := skill.DownloadSkill(entry, skillsDir); err != nil {
+				return []Event{{Type: EventError, Content: "Download fejlede: " + err.Error()}}
+			}
+			return []Event{{Type: EventSystem, Content: "✓ " + name + " installeret i .ekte/skills/\nGenstart ekte for at aktivere den."}}
+		}
+	}
+	return []Event{{Type: EventSystem, Content: "Skill ikke fundet i SKILLeton: " + name + "\nBrug '/skills catalog' for at se hvad der er tilgængeligt."}}
 }
 
 func (a *Agent) handleSpec(ctx context.Context, arg string) []Event {
