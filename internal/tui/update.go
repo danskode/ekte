@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/danskode/ekte/internal/agent"
 	"github.com/danskode/ekte/internal/provider"
 )
@@ -16,6 +17,34 @@ type msgStreamStarted struct{ ch <-chan agent.Event }
 
 // msgStreamEnd markerer at kanalen er lukket og streaming er færdig.
 type msgStreamEnd struct{}
+
+// msgMdReady sendes når glamour-rendereren er klar i baggrunden.
+type msgMdReady struct{ r *glamour.TermRenderer }
+
+func forrestenCmd(a *agent.Agent, input string) tea.Cmd {
+	return func() tea.Msg {
+		ch := a.ProcessStream(context.Background(), input)
+		for ev := range ch {
+			if ev.Type == agent.EventForresten || ev.Type == agent.EventError {
+				return ev
+			}
+		}
+		return agent.Event{Type: agent.EventForresten, Content: ""}
+	}
+}
+
+func initMdCmd(width int) tea.Cmd {
+	return func() tea.Msg {
+		r, err := glamour.NewTermRenderer(
+			glamour.WithStandardStyle("dark"),
+			glamour.WithWordWrap(width),
+		)
+		if err != nil {
+			return msgMdReady{}
+		}
+		return msgMdReady{r: r}
+	}
+}
 
 func startStreamCmd(a *agent.Agent, input string) tea.Cmd {
 	return func() tea.Msg {
@@ -49,11 +78,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toolPanel = viewport.New(toolPanelWidth-4, msg.Height-10)
 			m.input.SetWidth(msg.Width - 4)
 			m.ready = true
+			m.conversation.SetContent(m.conversationContent())
+			m.conversation.GotoBottom()
+			return m, initMdCmd(msg.Width - 6)
 		} else {
 			m.conversation.Width = msg.Width - 4
 			m.conversation.Height = msg.Height - 10
 			m.input.SetWidth(msg.Width - 4)
+			return m, initMdCmd(msg.Width - 6)
 		}
+
+	case msgMdReady:
+		m.mdRenderer = msg.r
+		m.conversation.SetContent(m.conversationContent())
 
 	case tea.KeyMsg:
 		if msg.String() == "shift+enter" {
@@ -77,11 +114,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlC:
 			return m, tea.Quit
 
+		case tea.KeyPgUp:
+			if m.toolOutput != "" {
+				m.toolPanel.HalfViewUp()
+			} else {
+				m.conversation.HalfViewUp()
+			}
+			return m, nil
+
+		case tea.KeyPgDown:
+			if m.toolOutput != "" {
+				m.toolPanel.HalfViewDown()
+			} else {
+				m.conversation.HalfViewDown()
+			}
+			return m, nil
+
 		case tea.KeyCtrlJ:
 			m.input.InsertString("\n")
 			return m, nil
 
+		case tea.KeyTab:
+			if len(m.suggestions) > 0 {
+				m.suggestionIdx = (m.suggestionIdx + 1) % len(m.suggestions)
+				m.input.SetValue(m.suggestions[m.suggestionIdx])
+				m.input.CursorEnd()
+				return m, nil
+			}
+
+		case tea.KeyEsc:
+			if len(m.suggestions) > 0 {
+				m.suggestions = nil
+				m.suggestionIdx = -1
+				return m, nil
+			}
+			if m.toolOutput != "" {
+				m.toolOutput = ""
+				return m, nil
+			}
+
 		case tea.KeyUp:
+			if len(m.suggestions) > 0 {
+				if m.suggestionIdx <= 0 {
+					m.suggestionIdx = len(m.suggestions) - 1
+				} else {
+					m.suggestionIdx--
+				}
+				return m, nil
+			}
 			if m.input.Focused() && m.input.Line() == 0 {
 				if m.historyIdx == -1 {
 					m.savedDraft = m.input.Value()
@@ -95,6 +175,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyDown:
+			if len(m.suggestions) > 0 {
+				m.suggestionIdx = (m.suggestionIdx + 1) % len(m.suggestions)
+				return m, nil
+			}
 			if m.historyIdx >= 0 {
 				m.historyIdx--
 				if m.historyIdx == -1 {
@@ -107,12 +191,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyEnter:
-			if m.streaming {
-				return m, nil // ignorer input under streaming
+			if len(m.suggestions) > 0 && m.suggestionIdx >= 0 {
+				m.input.SetValue(m.suggestions[m.suggestionIdx] + " ")
+				m.input.CursorEnd()
+				m.suggestions = nil
+				m.suggestionIdx = -1
+				return m, nil
 			}
 			val := strings.TrimSpace(m.input.Value())
 			if val == "" {
 				return m, nil
+			}
+			if strings.HasPrefix(val, "/forresten") {
+				m.input.Reset()
+				m.historyIdx = -1
+				m.savedDraft = ""
+				if len(m.history) == 0 || m.history[len(m.history)-1] != val {
+					m.history = append(m.history, val)
+				}
+				m.messages = append(m.messages, provider.Message{Role: "user", Content: val})
+				m.forrestenPending = true
+				m.conversation.SetContent(m.conversationContent())
+				m.conversation.GotoBottom()
+				return m, forrestenCmd(m.agent, val)
+			}
+			if m.streaming {
+				return m, nil // ignorer input under streaming
 			}
 			m.input.Reset()
 			m.historyIdx = -1
@@ -145,6 +249,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case msgStreamEnd:
 		m.streaming = false
 		m.streamCh = nil
+		m.conversation.SetContent(m.conversationContent())
+		m.conversation.GotoBottom()
 
 	case agent.Event:
 		switch msg.Type {
@@ -160,19 +266,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamBuf = ""
 			m.streamCh = nil
 			m.messages = append(m.messages, provider.Message{Role: "assistant", Content: msg.Content})
+			if msg.Source != "" {
+				m.messages = append(m.messages, provider.Message{
+					Role:    "system",
+					Content: "Information fra 📚 wiki · " + msg.Source,
+				})
+			}
 			m.conversation.SetContent(m.conversationContent())
 			m.conversation.GotoBottom()
 
 		case agent.EventAssistant:
-			// Bruges af /forresten og /wiki — ikke streaming
 			m.messages = append(m.messages, provider.Message{Role: "assistant", Content: msg.Content})
+			if msg.Source != "" {
+				m.messages = append(m.messages, provider.Message{
+					Role:    "system",
+					Content: "Information fra 📚 wiki · " + msg.Source,
+				})
+			}
+			m.conversation.SetContent(m.conversationContent())
+			m.conversation.GotoBottom()
+
+		case agent.EventForresten:
+			m.forrestenPending = false
+			if msg.Content != "" {
+				m.messages = append(m.messages, provider.Message{Role: "forresten", Content: msg.Content})
+			}
 			m.conversation.SetContent(m.conversationContent())
 			m.conversation.GotoBottom()
 
 		case agent.EventSystem:
+			if msg.Prefill != "" {
+				m.input.SetValue(msg.Prefill)
+				m.input.CursorEnd()
+			}
 			if msg.Content == "" {
+				m.streaming = false
+				m.streamBuf = ""
+				m.streamCh = nil
 				m.messages = nil
-				m.conversation.SetContent("")
+				m.conversation.SetContent(m.conversationContent())
 			} else {
 				m.appendSystem(msg.Content)
 			}
@@ -207,6 +339,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var inputCmd tea.Cmd
 	m.input, inputCmd = m.input.Update(msg)
 	cmds = append(cmds, inputCmd)
+	m.updateSuggestions()
 
 	var convCmd tea.Cmd
 	m.conversation, convCmd = m.conversation.Update(msg)
