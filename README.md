@@ -76,12 +76,33 @@ Ved første kørsel guides du igennem en kort onboarding:
 1. **Tillid** — bekræft at du stoler på mappen
 2. **Projektbeskrivelse** — besvar et par spørgsmål om projektet; svaret gemmes som `ekte.md`
 3. **Navn** — hvad vil du kaldes, og hvad skal din agent hedde?
-4. **API-opsætning** — vælg provider interaktivt; ekte forklarer præcis hvad du skal gøre
+4. **Modelopsætning** — ekte skriver provider og model til `.ekte/config.yaml`. Du kan altid redigere filen senere
 5. **Wiki** — valgfrit: sæt en personlig wiki op til videndeling på tværs af projekter
 
-### API-nøgle
+### Modelopsætning — `.ekte/config.yaml`
 
-ekte gemmer **aldrig** API-nøgler i config-filen — kun i miljøvariabler.
+Provider og model konfigureres i `.ekte/config.yaml` i projektmappen. Filen oprettes automatisk ved onboarding, men kan også oprettes/redigeres manuelt.
+
+```yaml
+# Anthropic
+provider: anthropic
+model: claude-sonnet-4-6
+
+# OpenAI
+provider: openai
+model: gpt-4o-mini
+
+# Lokal Ollama (bruges via OpenAI-kompatibelt API)
+provider: openai
+model: llama3.2
+base_url: http://localhost:11434/v1
+```
+
+For at skifte model: rediger `model:`-feltet og genstart `ekte`.
+
+### API-nøgle (kun i miljøvariabler)
+
+ekte gemmer **aldrig** API-nøgler i `config.yaml` — kun i miljøvariabler.
 Nøgler i filer risikerer at lække via git-historik.
 
 ```bash
@@ -94,18 +115,11 @@ export OPENAI_API_KEY="sk-..."
 # Tilføj til ~/.bashrc eller ~/.zshrc så den huskes permanent
 ```
 
-### Lokal model (Ollama)
+For lokal Ollama er API-nøgle ikke nødvendig — den kører lokalt:
 
 ```bash
 ollama pull llama3.2
-```
-
-Vælg "Lokal Ollama" i API-guiden, eller konfigurer manuelt i `.ekte/config.yaml`:
-
-```yaml
-provider: openai
-model: llama3.2
-base_url: http://localhost:11434/v1
+ollama serve   # hvis den ikke allerede kører som service
 ```
 
 ---
