@@ -24,7 +24,11 @@ if $FULL_REVIEW; then
     exit 1
   fi
   echo "Indlæser $FILE_COUNT Go-filer til security review..."
-  CODE=$(find . -name "*.go" -not -path "*/vendor/*" -print0 | sort -z | xargs -0 -I{} sh -c 'printf "=== %s ===\n" "{}"; cat "{}"')
+  CODE=$(find . -name "*.go" -not -path "*/vendor/*" -print0 | sort -z | while IFS= read -r -d '' f; do
+    printf '=== %s ===\n' "$f"
+    cat "$f"
+    printf '\n'
+  done)
   CONTEXT="Hele Go-kodebasen ($FILE_COUNT filer)"
 else
   UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null || echo "")
@@ -38,7 +42,6 @@ else
       exit 0
     fi
   fi
-  # Sanitér branch-navn: kun alfanumerisk + /_.-
   UPSTREAM=$(printf '%s' "$UPSTREAM" | tr -cd '[:alnum:]/_.-')
   if [ -z "$UPSTREAM" ]; then
     echo "Ugyldig upstream efter sanitering."
@@ -54,15 +57,18 @@ else
   echo "Reviewe $COMMIT_COUNT upushede commits..."
 fi
 
-# Prompt skrives til tempfil og sendes via stdin til claude --print.
-# Undgår shell-expansion af kodeindhold og eksponering i procesargumenter (CWE-214).
+# Prompt skrives til tempfil og sendes via stdin (undgår CWE-214/procesarg-eksponering).
 TMPFILE=$(mktemp)
-trap 'rm -f "$TMPFILE"' EXIT
+ERRFILE="${TMPFILE}.err"
+trap 'rm -f "$TMPFILE" "$ERRFILE"' EXIT
+
+# Escape </code> i kodeindhold så det ikke bryder XML-afgrænseren i prompten.
+SAFE_CODE=$(printf '%s' "$CODE" | sed 's|</code>|<\\/code>|g')
 
 printf '%s\n' "Du er en Go-sikkerhedsekspert (OWASP Top 10, CWE). Analyser følgende kode." > "$TMPFILE"
 printf '\nKontekst: %s\n' "$CONTEXT" >> "$TMPFILE"
 printf '\n<code>\n' >> "$TMPFILE"
-printf '%s\n' "$CODE" >> "$TMPFILE"
+printf '%s\n' "$SAFE_CODE" >> "$TMPFILE"
 printf '</code>\n\n' >> "$TMPFILE"
 cat >> "$TMPFILE" <<'STATIC'
 Returner KUN valid JSON uden markdown-wrapper:
@@ -82,14 +88,20 @@ Returner KUN valid JSON uden markdown-wrapper:
 Ingen fund → findings tom liste, risk_level "low".
 STATIC
 
-RESPONSE=$(claude --print < "$TMPFILE" 2>/dev/null)
+RESPONSE=$(claude --print < "$TMPFILE" 2>"$ERRFILE")
+if [ -s "$ERRFILE" ]; then
+  echo -e "${YELLOW}Claude fejl:${NC}" >&2
+  cat "$ERRFILE" >&2
+fi
 
-# Strip eventuelle markdown-code-fences — Claude ignorerer af og til instruktionen
+# Strip eventuelle markdown-code-fences og ANSI-sekvenser fra svaret.
 RESPONSE=$(printf '%s' "$RESPONSE" | python3 -c "
 import sys, re
 content = sys.stdin.read().strip()
 content = re.sub(r'^[ \t]*\`\`\`(?:json)?\s*\n?', '', content)
 content = re.sub(r'\n?\`\`\`\s*$', '', content.strip())
+# Strip ANSI escape-sekvenser (terminal injection)
+content = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', content)
 print(content, end='')
 ")
 
@@ -115,7 +127,11 @@ echo ""
 
 if [ "$FINDING_COUNT" -gt 0 ]; then
   printf '%s' "$RESPONSE" | python3 -c "
-import sys, json
+import sys, json, re
+
+def sanitize(s):
+    return re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', str(s))
+
 data = json.load(sys.stdin)
 SEV_COLOR = {
   'critical': '\033[0;31m',
@@ -127,18 +143,23 @@ RESET = '\033[0m'
 for f in data['findings']:
     sev = f.get('severity', 'low')
     c = SEV_COLOR.get(sev, '')
-    print(f\"{c}[{sev.upper()}] {f.get('file', '?')}{RESET}\")
-    print(f\"  Problem: {f.get('issue', '')}\")
-    print(f\"  Fix:     {f.get('recommendation', '')}\")
+    print(f\"{c}[{sev.upper()}] {sanitize(f.get('file', '?'))}{RESET}\")
+    print(f\"  Problem: {sanitize(f.get('issue', ''))}\")
+    print(f\"  Fix:     {sanitize(f.get('recommendation', ''))}\")
     print()
 "
 fi
 
 # Pre-push mode: bloker ved medium+ fund
 if ! $FULL_REVIEW && [[ "$RISK" =~ ^(medium|high|critical)$ ]]; then
-  read -rp "Push alligevel? [j/N] " CONFIRM </dev/tty
-  if [[ ! "$CONFIRM" =~ ^[jJ]$ ]]; then
-    echo "Push afbrudt."
+  if [ -c /dev/tty ]; then
+    read -rp "Push alligevel? [j/N] " CONFIRM </dev/tty
+    if [[ ! "$CONFIRM" =~ ^[jJ]$ ]]; then
+      echo "Push afbrudt."
+      exit 1
+    fi
+  else
+    echo "Ingen terminal tilgængelig og medium+ risiko — push afbrudt. Kør 'make security' og push manuelt."
     exit 1
   fi
 fi
