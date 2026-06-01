@@ -54,7 +54,8 @@ else
   echo "Reviewe $COMMIT_COUNT upushede commits..."
 fi
 
-# Byg prompt i tempfil for at undgå shell-expansion af kodeindhold (CWE-78)
+# Prompt skrives til tempfil og sendes via stdin til claude --print.
+# Undgår shell-expansion af kodeindhold og eksponering i procesargumenter (CWE-214).
 TMPFILE=$(mktemp)
 trap 'rm -f "$TMPFILE"' EXIT
 
@@ -81,7 +82,7 @@ Returner KUN valid JSON uden markdown-wrapper:
 Ingen fund → findings tom liste, risk_level "low".
 STATIC
 
-RESPONSE=$(claude --print "$(cat "$TMPFILE")" 2>/dev/null)
+RESPONSE=$(claude --print < "$TMPFILE" 2>/dev/null)
 
 if ! printf '%s' "$RESPONSE" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
   echo -e "${YELLOW}Uventet svar fra Claude:${NC}"
