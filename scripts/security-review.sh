@@ -18,17 +18,13 @@ fi
 
 if $FULL_REVIEW; then
   FILE_COUNT=$(find . -name "*.go" -not -path "*/vendor/*" | wc -l | tr -d ' ')
-  CODE_BYTES=$(find . -name "*.go" -not -path "*/vendor/*" | xargs cat 2>/dev/null | wc -c)
+  CODE_BYTES=$(find . -name "*.go" -not -path "*/vendor/*" -print0 | xargs -0 cat | wc -c)
   if [ "$CODE_BYTES" -gt 524288 ]; then
     echo -e "${YELLOW}Kodebase > 512 KB — brug 'git push' (diff-review) i stedet.${NC}"
     exit 1
   fi
   echo "Indlæser $FILE_COUNT Go-filer til security review..."
-  CODE=$(find . -name "*.go" -not -path "*/vendor/*" | sort | while IFS= read -r f; do
-    printf '=== %s ===\n' "$f"
-    cat "$f"
-    printf '\n'
-  done)
+  CODE=$(find . -name "*.go" -not -path "*/vendor/*" -print0 | sort -z | xargs -0 -I{} sh -c 'printf "=== %s ===\n" "{}"; cat "{}"')
   CONTEXT="Hele Go-kodebasen ($FILE_COUNT filer)"
 else
   UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null || echo "")
@@ -44,12 +40,16 @@ else
   fi
   # Sanitér branch-navn: kun alfanumerisk + /_.-
   UPSTREAM=$(printf '%s' "$UPSTREAM" | tr -cd '[:alnum:]/_.-')
-  CODE=$(git diff "$UPSTREAM"..HEAD 2>/dev/null || echo "")
+  if [ -z "$UPSTREAM" ]; then
+    echo "Ugyldig upstream efter sanitering."
+    exit 1
+  fi
+  CODE=$(git diff "$UPSTREAM"..HEAD)
   if [ -z "$CODE" ]; then
     echo -e "${GREEN}Ingen upushede ændringer.${NC}"
     exit 0
   fi
-  COMMIT_COUNT=$(git rev-list "$UPSTREAM"..HEAD --count 2>/dev/null || echo "?")
+  COMMIT_COUNT=$(git rev-list "$UPSTREAM"..HEAD --count || echo "?")
   CONTEXT="Git diff af $COMMIT_COUNT upushede commits mod $UPSTREAM"
   echo "Reviewe $COMMIT_COUNT upushede commits..."
 fi
@@ -83,6 +83,15 @@ Ingen fund → findings tom liste, risk_level "low".
 STATIC
 
 RESPONSE=$(claude --print < "$TMPFILE" 2>/dev/null)
+
+# Strip eventuelle markdown-code-fences — Claude ignorerer af og til instruktionen
+RESPONSE=$(printf '%s' "$RESPONSE" | python3 -c "
+import sys, re
+content = sys.stdin.read().strip()
+content = re.sub(r'^[ \t]*\`\`\`(?:json)?\s*\n?', '', content)
+content = re.sub(r'\n?\`\`\`\s*$', '', content.strip())
+print(content, end='')
+")
 
 if ! printf '%s' "$RESPONSE" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
   echo -e "${YELLOW}Uventet svar fra Claude:${NC}"
