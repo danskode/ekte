@@ -129,11 +129,13 @@ func (m Model) msgHeader(rendered string, w int) string {
 
 func (m *Model) ShowBanner() {
 	letterRows := [][]string{
-		{"██████████", "██        ", "████████  ", "██        ", "██████████"}, // E
-		{"██      ██", "██    ██  ", "██████    ", "██    ██  ", "██      ██"}, // K
-		{"██████████", "    ██    ", "    ██    ", "    ██    ", "    ██    "}, // T
-		{"██████████", "██        ", "████████  ", "██        ", "██████████"}, // E
+		{"          ", "   █████  ", "  ████████", "  ██      ", "   ██████ "}, // e
+		{"██        ", "██    ██  ", "███████   ", "██    ██  ", "██      ██"}, // k
+		{"    ██    ", "████████  ", "    ██    ", "    ██    ", "    ██████"}, // t
+		{"          ", "   █████  ", "  ████████", "  ██      ", "   ██████ "}, // e
 	}
+	// Ingen separator mellem k og t — tværstregen på t peger mod k
+	separators := []string{" ", "", " "}
 	colors := []lipgloss.Color{
 		lipgloss.Color("219"),
 		lipgloss.Color("213"),
@@ -146,14 +148,14 @@ func (m *Model) ShowBanner() {
 		for i, letter := range letterRows {
 			style := lipgloss.NewStyle().Foreground(colors[i]).Bold(true)
 			sb.WriteString(style.Render(letter[row]))
-			if i < len(letterRows)-1 {
-				sb.WriteString("    ")
+			if i < len(separators) {
+				sb.WriteString(separators[i])
 			}
 		}
 		sb.WriteString("\n")
 	}
 	subtitleStyle := lipgloss.NewStyle().Foreground(colorSubtle)
-	sb.WriteString(subtitleStyle.Render("et agent harness med fokus på spec driven development"))
+	sb.WriteString(subtitleStyle.Render("et agent harnes baseret på AIDD"))
 
 	m.bannerContent = sb.String()
 }
