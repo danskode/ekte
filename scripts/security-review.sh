@@ -81,14 +81,15 @@ TMPFILE=$(mktemp)
 ERRFILE="${TMPFILE}.err"
 trap 'rm -f "$TMPFILE" "$ERRFILE"' EXIT
 
-# Escape både åbnings- og lukketag i kodeindhold så ingen af dem
-# kan optræde uredigeret og svække tillidsgrænsen.
-SAFE_CODE=$(printf '%s' "$CODE" | sed 's|<untrusted-code>|\&lt;untrusted-code>|g; s|</untrusted-code>|\&lt;/untrusted-code>|g')
+# HTML-entity-escape al bruger-kontrolleret indhold (CWE-77).
+# Forhindrer at < eller > i kode/git-metadata kan bryde XML-afgrænsningen.
+escape_xml() { sed 's|&|\&amp;|g; s|<|\&lt;|g; s|>|\&gt;|g'; }
 
-# $CONTEXT placeres inden for <untrusted-code> da det indeholder
-# git-afledt data (branch-navn, filtal) der potentielt kan kontrolleres udefra.
+SAFE_CODE=$(printf '%s' "$CODE" | escape_xml)
+SAFE_CONTEXT=$(printf '%s' "$CONTEXT" | escape_xml)
+
 printf '<untrusted-code>\n' > "$TMPFILE"
-printf 'Kontekst: %s\n\n' "$CONTEXT" >> "$TMPFILE"
+printf 'Kontekst: %s\n\n' "$SAFE_CONTEXT" >> "$TMPFILE"
 printf '%s\n' "$SAFE_CODE" >> "$TMPFILE"
 printf '</untrusted-code>\n' >> "$TMPFILE"
 
