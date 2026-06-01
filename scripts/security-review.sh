@@ -78,7 +78,7 @@ if [ ! -f "$SYSTEM_PROMPT" ]; then
 fi
 
 TMPFILE=$(mktemp)
-ERRFILE="${TMPFILE}.err"
+ERRFILE=$(mktemp)
 trap 'rm -f "$TMPFILE" "$ERRFILE"' EXIT
 
 # HTML-entity-escape al bruger-kontrolleret indhold (CWE-77).
