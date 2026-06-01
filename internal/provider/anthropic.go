@@ -70,11 +70,25 @@ func (p *AnthropicProvider) ChatWithTools(ctx context.Context, messages []Messag
 			Input json.RawMessage `json:"input"`
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
+		Usage      struct {
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
 		return nil, fmt.Errorf("anthropic decode: %w", err)
 	}
-	out := &Response{StopReason: ar.StopReason}
+	out := &Response{
+		StopReason: ar.StopReason,
+		Usage: Usage{
+			InputTokens:      ar.Usage.InputTokens,
+			OutputTokens:     ar.Usage.OutputTokens,
+			CacheReadTokens:  ar.Usage.CacheReadInputTokens,
+			CacheWriteTokens: ar.Usage.CacheCreationInputTokens,
+		},
+	}
 	for _, c := range ar.Content {
 		switch c.Type {
 		case "text":

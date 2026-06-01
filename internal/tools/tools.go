@@ -11,7 +11,7 @@ import (
 )
 
 // Definitions returnerer tool-definitioner til brug i LLM-kald.
-// canWrite styrer om write_file er inkluderet.
+// canWrite styrer om write_file, edit_file og create_dir er inkluderet.
 func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
 	var defs []provider.ToolDefinition
 	if canRead {
@@ -51,24 +51,62 @@ func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
 		)
 	}
 	if canWrite {
-		defs = append(defs, provider.ToolDefinition{
-			Name:        "write_file",
-			Description: "Skriv eller overskriv en fil. Sti er relativ til projektmappen.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path": map[string]any{
-						"type":        "string",
-						"description": "Filsti relativ til projektmappen",
+		defs = append(defs,
+			provider.ToolDefinition{
+				Name:        "write_file",
+				Description: "Skriv eller overskriv en fil. Opretter automatisk manglende mapper. Sti er relativ til projektmappen.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{
+							"type":        "string",
+							"description": "Filsti relativ til projektmappen",
+						},
+						"content": map[string]any{
+							"type":        "string",
+							"description": "Filindholdet der skal skrives",
+						},
 					},
-					"content": map[string]any{
-						"type":        "string",
-						"description": "Filindholdet der skal skrives",
-					},
+					"required": []string{"path", "content"},
 				},
-				"required": []string{"path", "content"},
 			},
-		})
+			provider.ToolDefinition{
+				Name:        "edit_file",
+				Description: "Erstat en præcis tekststreng i en eksisterende fil. Fejler hvis old_string ikke findes eller forekommer mere end én gang.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{
+							"type":        "string",
+							"description": "Filsti relativ til projektmappen",
+						},
+						"old_string": map[string]any{
+							"type":        "string",
+							"description": "Den eksakte tekst der skal erstattes — skal være unik i filen",
+						},
+						"new_string": map[string]any{
+							"type":        "string",
+							"description": "Teksten der erstatter old_string",
+						},
+					},
+					"required": []string{"path", "old_string", "new_string"},
+				},
+			},
+			provider.ToolDefinition{
+				Name:        "create_dir",
+				Description: "Opret en mappe (og eventuelle parent-mapper). Sti er relativ til projektmappen.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{
+							"type":        "string",
+							"description": "Mappesti relativ til projektmappen",
+						},
+					},
+					"required": []string{"path"},
+				},
+			},
+		)
 	}
 	return defs
 }
@@ -99,6 +137,18 @@ func Execute(call provider.ToolCall, root string, canRead, canWrite bool) (strin
 			return "", fmt.Errorf("file_write er ikke tilladt i whitelist")
 		}
 		return writeFile(args, root)
+
+	case "edit_file":
+		if !canWrite {
+			return "", fmt.Errorf("file_write er ikke tilladt i whitelist")
+		}
+		return editFile(args, root)
+
+	case "create_dir":
+		if !canWrite {
+			return "", fmt.Errorf("file_write er ikke tilladt i whitelist")
+		}
+		return createDir(args, root)
 
 	default:
 		return "", fmt.Errorf("ukendt tool: %s", call.Name)
@@ -203,6 +253,54 @@ func writeFile(args map[string]any, root string) (string, error) {
 		return "", fmt.Errorf("kan ikke skrive %s: %w", path, err)
 	}
 	return fmt.Sprintf("✓ Skrevet: %s (%d bytes)", path, len(content)), nil
+}
+
+func editFile(args map[string]any, root string) (string, error) {
+	path, _ := args["path"].(string)
+	oldStr, _ := args["old_string"].(string)
+	newStr, _ := args["new_string"].(string)
+	if path == "" {
+		return "", fmt.Errorf("path mangler")
+	}
+	if oldStr == "" {
+		return "", fmt.Errorf("old_string mangler")
+	}
+	abs, err := safePath(root, path)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return "", fmt.Errorf("kan ikke læse %s: %w", path, err)
+	}
+	content := string(data)
+	count := strings.Count(content, oldStr)
+	if count == 0 {
+		return "", fmt.Errorf("old_string ikke fundet i %s", path)
+	}
+	if count > 1 {
+		return "", fmt.Errorf("old_string forekommer %d gange i %s — gør den mere specifik", count, path)
+	}
+	updated := strings.Replace(content, oldStr, newStr, 1)
+	if err := os.WriteFile(abs, []byte(updated), 0644); err != nil {
+		return "", fmt.Errorf("kan ikke skrive %s: %w", path, err)
+	}
+	return fmt.Sprintf("✓ Redigeret: %s", path), nil
+}
+
+func createDir(args map[string]any, root string) (string, error) {
+	path, _ := args["path"].(string)
+	if path == "" {
+		return "", fmt.Errorf("path mangler")
+	}
+	abs, err := safePath(root, path)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(abs, 0755); err != nil {
+		return "", fmt.Errorf("kan ikke oprette mappe %s: %w", path, err)
+	}
+	return fmt.Sprintf("✓ Mappe oprettet: %s", path), nil
 }
 
 // safePath sikrer at stien ikke escaper projektmappen via path traversal.

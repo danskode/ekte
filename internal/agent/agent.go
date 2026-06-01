@@ -8,9 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/danskode/ekte/internal/dep"
 	"github.com/danskode/ekte/internal/git"
+	"github.com/danskode/ekte/internal/obs"
 	"github.com/danskode/ekte/internal/provider"
 	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
@@ -49,18 +51,27 @@ type Config struct {
 	Skills     []skill.Skill
 	Whitelist  provider.WhitelistConfig
 	Hooks      map[string]string
+	Obs        *obs.Recorder
+	// ProviderName og Model bruges til obs-logging
+	ProviderName string
+	ModelName    string
 }
 
 type Agent struct {
-	cfg             Config
-	messages        []provider.Message
-	forrestenHist   []provider.Message
-	activeSkill     *skill.Skill
-	sessions        []session.Session
-	pendingWikiSave string
+	cfg              Config
+	messages         []provider.Message
+	forrestenHist    []provider.Message
+	activeSkill      *skill.Skill
+	sessions         []session.Session
+	pendingWikiSave  string
 	pendingWikiFetch string // indhold fra /wiki-get, klar til /wiki-gem
 	pendingWikiPath  string // foreslået sti fra /wiki-get
-	tokenCount      int
+	tokenCount       int
+	lastBreakdown    obsBreakdown
+}
+
+type obsBreakdown struct {
+	sys, wiki, hist, user, tools int
 }
 
 func New(cfg Config) *Agent {
@@ -79,6 +90,7 @@ func (a *Agent) Commands() []string {
 		"/hjælp", "/clear", "/compress", "/spec", "/wiki", "/wiki-get", "/wiki-gem",
 		"/forresten", "/hook", "/skills", "/dep", "/sec-check",
 		"/resume", "/exit",
+		"/observ", "/observ all", "/observ html",
 	}
 	for _, s := range a.cfg.Skills {
 		builtin = append(builtin, "/"+s.Name)
@@ -119,6 +131,7 @@ func (a *Agent) handleChat(ctx context.Context, input string) []Event {
 		return []Event{{Type: EventError, Content: "LLM-fejl: " + err.Error()}}
 	}
 
+	a.recordTurn(input, resp, msgs, -1)
 	a.messages = append(a.messages, provider.Message{Role: "assistant", Content: resp.Content})
 	a.tokenCount = estimateTokens(a.messages)
 
@@ -167,6 +180,7 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 
 	// Injicér wiki som autoritativ kilde — skal altid prioriteres over generel viden
 	var wikiSource string
+	wikiIdx := -1
 	if a.cfg.Wiki != nil {
 		_, pages, err := a.cfg.Wiki.Query(input)
 		if err == nil && len(pages) > 0 {
@@ -179,6 +193,7 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 				paths = append(paths, p.Path)
 			}
 			msgs = append([]provider.Message{{Role: "system", Content: ctxBuilder.String()}}, msgs...)
+			wikiIdx = 0
 			wikiSource = "📚 " + strings.Join(paths, " · ")
 		}
 	}
@@ -202,6 +217,7 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 
 			if len(resp.ToolCalls) == 0 {
 				// Intet tool call — vis svar og afslut
+				a.recordTurn(input, resp, msgs, wikiIdx)
 				a.messages = append(a.messages, provider.Message{Role: "assistant", Content: resp.Content})
 				a.tokenCount = estimateTokens(a.messages)
 				ch <- Event{Type: EventStreamDone, Content: resp.Content, Source: wikiSource}
@@ -251,6 +267,12 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 			return
 		}
 
+		// Streaming giver ikke usage fra API — estimér ud fra input-messages og output-længde
+		streamResp := &provider.Response{Content: full, Usage: provider.Usage{
+			InputTokens:  estimateTokens(msgs),
+			OutputTokens: len(full) / 4,
+		}}
+		a.recordTurn(input, streamResp, msgs, wikiIdx)
 		a.messages = append(a.messages, provider.Message{Role: "assistant", Content: full})
 		a.tokenCount = estimateTokens(a.messages)
 		ch <- Event{Type: EventStreamDone, Content: full, Source: wikiSource}
@@ -320,6 +342,9 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 
 	case "/resume":
 		return a.handleResume(arg)
+
+	case "/observ":
+		return a.handleObserv(arg)
 	}
 
 	return []Event{{Type: EventSystem, Content: "Ukendt kommando: " + cmd + " (prøv /hjælp)"}}
@@ -565,6 +590,137 @@ func (a *Agent) handleResume(arg string) []Event {
 		{Type: EventSystem, Content: "✓ Session indlæst: " + s.Title},
 		{Type: EventTokenCount, Tokens: a.tokenCount},
 	}
+}
+
+func (a *Agent) handleObserv(arg string) []Event {
+	if a.cfg.Obs == nil {
+		return []Event{{Type: EventSystem, Content: "Observability er ikke aktivt i denne session."}}
+	}
+
+	switch strings.TrimSpace(arg) {
+	case "all":
+		summaries, err := obs.LoadAll(a.cfg.Obs.SessionDir())
+		if err != nil || len(summaries) == 0 {
+			return []Event{{Type: EventToolOutput, Content: "Ingen tværgående observability-data fundet.\nKør et par sessioner og prøv igen."}}
+		}
+		return []Event{{Type: EventToolOutput, Content: obs.FormatAllTUI(summaries)}}
+
+	case "html":
+		summaries, err := obs.LoadAll(a.cfg.Obs.SessionDir())
+		if err != nil {
+			summaries = nil
+		}
+		home, _ := os.UserHomeDir()
+		dest := filepath.Join(home, ".ekte", "observ-report.html")
+		if err := obs.WriteHTML(summaries, dest); err != nil {
+			return []Event{{Type: EventError, Content: "HTML-rapport fejlede: " + err.Error()}}
+		}
+		// Prøv at åbne i browser
+		_ = exec.Command("xdg-open", dest).Start()
+		return []Event{{Type: EventSystem, Content: "✓ Rapport gemt: " + dest}}
+
+	default:
+		turns := a.cfg.Obs.Turns()
+		if len(turns) == 0 {
+			return []Event{{Type: EventToolOutput, Content: "Ingen observability-data for denne session endnu."}}
+		}
+		return []Event{{Type: EventToolOutput, Content: obs.FormatTUI(turns)}}
+	}
+}
+
+// buildBreakdown estimerer token-fordeling for den aktuelle messages-liste.
+func buildBreakdown(msgs []provider.Message, wikiIdx int) obsBreakdown {
+	var bd obsBreakdown
+	for i, m := range msgs {
+		tk := len(m.Content) / 4
+		switch {
+		case m.Role == "system" && wikiIdx >= 0 && i == wikiIdx:
+			bd.wiki = tk
+		case m.Role == "system" && i == 0:
+			bd.sys = tk
+		case m.Role == "tool":
+			bd.tools += tk
+		case i == len(msgs)-1 && m.Role == "user":
+			bd.user = tk
+		default:
+			bd.hist += tk
+		}
+	}
+	return bd
+}
+
+// promptOverlap returnerer true hvis prompt ligner det seneste user-input (>60% ordoverlap).
+func promptOverlap(current string, messages []provider.Message) bool {
+	var prev string
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			prev = messages[i].Content
+			break
+		}
+	}
+	if prev == "" {
+		return false
+	}
+	wordsA := strings.Fields(strings.ToLower(current))
+	wordsB := strings.Fields(strings.ToLower(prev))
+	if len(wordsA) < 3 || len(wordsB) < 3 {
+		return false
+	}
+	setA := make(map[string]bool, len(wordsA))
+	for _, w := range wordsA {
+		setA[w] = true
+	}
+	overlap := 0
+	for _, w := range wordsB {
+		if setA[w] {
+			overlap++
+		}
+	}
+	denom := len(wordsA)
+	if len(wordsB) > denom {
+		denom = len(wordsB)
+	}
+	return float64(overlap)/float64(denom) > 0.6
+}
+
+func (a *Agent) recordTurn(input string, resp *provider.Response, msgsBeforeCall []provider.Message, wikiIdx int) {
+	if a.cfg.Obs == nil {
+		return
+	}
+	bd := buildBreakdown(msgsBeforeCall, wikiIdx)
+	in := resp.Usage.InputTokens
+	out := resp.Usage.OutputTokens
+	if in == 0 {
+		in = estimateTokens(msgsBeforeCall)
+	}
+	if out == 0 {
+		out = len(resp.Content) / 4
+	}
+	a.lastBreakdown = bd
+	a.cfg.Obs.Record(obs.TurnStat{
+		Timestamp:    time.Now(),
+		Provider:     a.cfg.ProviderName,
+		Model:        a.cfg.ModelName,
+		UserChars:    len(input),
+		InputTokens:  in,
+		OutputTokens: out,
+		CacheRead:    resp.Usage.CacheReadTokens,
+		CacheWrite:   resp.Usage.CacheWriteTokens,
+		MsgCount:     len(msgsBeforeCall),
+		SysTokens:    bd.sys,
+		WikiTokens:   bd.wiki,
+		HistTokens:   bd.hist,
+		UserTokens:   bd.user,
+		ToolTokens:   bd.tools,
+		IsRepeat:     promptOverlap(input, a.messages[:max(0, len(a.messages)-1)]),
+	})
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (a *Agent) messagesWithSkill() []provider.Message {

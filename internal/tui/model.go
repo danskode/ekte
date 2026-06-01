@@ -15,10 +15,10 @@ import (
 )
 
 const (
-	maxTokens      = 200000
-	warnThreshold  = 0.75
-	critThreshold  = 0.90
-	toolPanelWidth = 40
+	defaultMaxTokens = 200000
+	warnThreshold    = 0.75
+	critThreshold    = 0.90
+	toolPanelWidth   = 40
 )
 
 
@@ -51,6 +51,7 @@ type Model struct {
 	streamCh  <-chan agent.Event
 
 	tokenCount int
+	maxTokens  int
 	spinner    spinner.Model
 	agent      *agent.Agent
 	ready      bool
@@ -75,6 +76,13 @@ func New(a *agent.Agent) Model {
 		spinner:       sp,
 		historyIdx:    -1,
 		suggestionIdx: -1,
+		maxTokens:     defaultMaxTokens,
+	}
+}
+
+func (m *Model) SetMaxTokens(n int) {
+	if n > 0 {
+		m.maxTokens = n
 	}
 }
 
@@ -258,7 +266,7 @@ func wordWrap(s string, width int) string {
 }
 
 func (m Model) contextStyle() lipgloss.Style {
-	ratio := float64(m.tokenCount) / float64(maxTokens)
+	ratio := float64(m.tokenCount) / float64(m.maxTokens)
 	switch {
 	case ratio >= critThreshold:
 		return styleContextCrit
@@ -270,7 +278,7 @@ func (m Model) contextStyle() lipgloss.Style {
 }
 
 func (m Model) statusBar() string {
-	ctx := fmt.Sprintf("kontekst: %d/%d", m.tokenCount, maxTokens)
+	ctx := fmt.Sprintf("kontekst: %d/%d", m.tokenCount, m.maxTokens)
 	ctxStyled := m.contextStyle().Render(ctx)
 
 	skillIndicator := ""

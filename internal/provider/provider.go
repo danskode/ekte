@@ -24,10 +24,18 @@ type ToolDefinition struct {
 	Parameters  map[string]any
 }
 
+type Usage struct {
+	InputTokens      int
+	OutputTokens     int
+	CacheReadTokens  int
+	CacheWriteTokens int
+}
+
 type Response struct {
 	Content    string
 	ToolCalls  []ToolCall
 	StopReason string
+	Usage      Usage
 }
 
 type Provider interface {

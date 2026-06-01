@@ -8,8 +8,11 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"time"
+
 	"github.com/danskode/ekte/internal/agent"
 	"github.com/danskode/ekte/internal/git"
+	"github.com/danskode/ekte/internal/obs"
 	"github.com/danskode/ekte/internal/onboarding"
 	"github.com/danskode/ekte/internal/provider"
 	"github.com/danskode/ekte/internal/skill"
@@ -26,8 +29,14 @@ func main() {
 	runTUI()
 }
 
+func globalEkteDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".ekte")
+}
+
 func runTUI() {
 	cwd, _ := os.Getwd()
+	globalDir := globalEkteDir()
 
 	var welcomeName string
 	isFirstRun := onboarding.IsFirstRun(cwd)
@@ -43,13 +52,16 @@ func runTUI() {
 		welcomeName = result.ProjectName
 	}
 
-	configPath := filepath.Join(".ekte", "config.yaml")
+	globalConfigPath := filepath.Join(globalDir, "config.yaml")
+	localConfigPath := filepath.Join(".ekte", "config.yaml")
 	skillsDir := filepath.Join(".ekte", "skills")
 
 	var p provider.Provider
 	var wikiInst *wiki.Wiki
 
-	cfg, err := provider.LoadConfig(configPath)
+	globalCfg, _ := provider.LoadConfig(globalConfigPath)
+	localCfg, _ := provider.LoadConfig(localConfigPath)
+	cfg := provider.MergeConfigs(globalCfg, localCfg)
 
 	profile := loadProfile()
 	if profile.UserName == "" || profile.AgentName == "" {
@@ -57,14 +69,15 @@ func runTUI() {
 		saveProfile(profile)
 	}
 
-	if err != nil || provider.MissingKey(cfg) {
-		if !promptAPISetup(configPath) {
+	if cfg == nil || provider.MissingKey(cfg) {
+		if !promptAPISetup(globalConfigPath) {
 			os.Exit(0)
 		}
-		cfg, err = provider.LoadConfig(configPath)
+		globalCfg, _ = provider.LoadConfig(globalConfigPath)
+		cfg = provider.MergeConfigs(globalCfg, localCfg)
 	}
 
-	if err == nil {
+	if cfg != nil {
 		p, _ = provider.NewFromConfig(cfg)
 		wCfg := &wiki.Config{Enabled: cfg.Wiki.Enabled, Path: cfg.Wiki.Path}
 		wikiInst, _ = wiki.New(wCfg)
@@ -87,22 +100,49 @@ func runTUI() {
 		hooks = cfg.Hooks
 	}
 
+	// Brug lokal session-mappe hvis .ekte/ eksisterer, ellers global fallback
+	sessionDir := filepath.Join(globalDir, "sessions")
+	if _, err := os.Stat(".ekte"); err == nil {
+		sessionDir = filepath.Join(".ekte", "sessions")
+	}
+	_ = os.MkdirAll(sessionDir, 0755)
+
+	sessionID := time.Now().Format("20060102-150405")
+	obsPath := filepath.Join(sessionDir, sessionID+"_obs.jsonl")
+	recorder := obs.NewRecorder(obsPath, sessionDir)
+
+	providerName := ""
+	modelName := ""
+	if cfg != nil {
+		providerName = cfg.Provider
+		modelName = cfg.Model
+	}
+
 	a := agent.New(agent.Config{
-		Provider:   p,
-		Skills:     skills,
-		Wiki:       wikiInst,
-		RepoRoot:   repoRoot,
-		WorkDir:    cwd,
-		SessionDir: filepath.Join(".ekte", "sessions"),
-		Whitelist:  whitelist,
-		Hooks:      hooks,
+		Provider:     p,
+		Skills:       skills,
+		Wiki:         wikiInst,
+		RepoRoot:     repoRoot,
+		WorkDir:      cwd,
+		SessionDir:   sessionDir,
+		Whitelist:    whitelist,
+		Hooks:        hooks,
+		Obs:          recorder,
+		ProviderName: providerName,
+		ModelName:    modelName,
 	})
 
 	m := tui.New(a)
 	m.SetNames(profile.UserName, profile.AgentName)
 
-	if provider.KeyInFile(configPath) {
-		m.AddWarning("⚠  API-nøgle fundet i .ekte/config.yaml — flyt den til env-variabel:\nexport ANTHROPIC_API_KEY=\"din-nøgle\"  (tilføj til ~/.bashrc)")
+	maxCtx := 0
+	if cfg != nil && cfg.ContextSize > 0 {
+		maxCtx = cfg.ContextSize
+	}
+	m.SetMaxTokens(maxCtx)
+
+	if provider.KeyInFile(globalConfigPath) || provider.KeyInFile(localConfigPath) {
+		m.AddWarning("⚠  API-nøgle fundet i config-fil — flyt den til env-variabel:\nexport ANTHROPIC_API_KEY=\"din-nøgle\"  (tilføj til ~/.bashrc)")
 	}
 
 	if context := loadEkteMd(cwd); context != "" {
@@ -130,7 +170,7 @@ type ekteProfile struct {
 }
 
 func loadProfile() ekteProfile {
-	data, err := os.ReadFile(filepath.Join(".ekte", "profile.yaml"))
+	data, err := os.ReadFile(filepath.Join(globalEkteDir(), "profile.yaml"))
 	if err != nil {
 		return ekteProfile{}
 	}
@@ -140,8 +180,10 @@ func loadProfile() ekteProfile {
 }
 
 func saveProfile(p ekteProfile) {
+	dir := globalEkteDir()
+	_ = os.MkdirAll(dir, 0755)
 	data, _ := yaml.Marshal(p)
-	_ = os.WriteFile(filepath.Join(".ekte", "profile.yaml"), data, 0644)
+	_ = os.WriteFile(filepath.Join(dir, "profile.yaml"), data, 0644)
 }
 
 func promptProfile() ekteProfile {

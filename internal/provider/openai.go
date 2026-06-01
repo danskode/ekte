@@ -56,6 +56,10 @@ func (p *OpenAIProvider) ChatWithTools(ctx context.Context, messages []Message, 
 	out := &Response{
 		Content:    choice.Message.Content,
 		StopReason: string(choice.FinishReason),
+		Usage: Usage{
+			InputTokens:  resp.Usage.PromptTokens,
+			OutputTokens: resp.Usage.CompletionTokens,
+		},
 	}
 	for _, tc := range choice.Message.ToolCalls {
 		var raw json.RawMessage

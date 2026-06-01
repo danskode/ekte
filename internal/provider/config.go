@@ -24,13 +24,14 @@ type WhitelistConfig struct {
 }
 
 type Config struct {
-	Provider  string            `yaml:"provider"`
-	Model     string            `yaml:"model"`
-	BaseURL   string            `yaml:"base_url"`
-	APIKey    string            `yaml:"api_key"` // læses kun fra env — advarsel hvis sat i fil
-	Wiki      WikiConfig        `yaml:"wiki"`
-	Whitelist WhitelistConfig   `yaml:"whitelist"`
-	Hooks     map[string]string `yaml:"hooks,omitempty"` // navn → shell-kommando
+	Provider    string            `yaml:"provider"`
+	Model       string            `yaml:"model"`
+	BaseURL     string            `yaml:"base_url"`
+	APIKey      string            `yaml:"api_key"` // læses kun fra env — advarsel hvis sat i fil
+	ContextSize int               `yaml:"context_size"` // 0 = brug default (200000)
+	Wiki        WikiConfig        `yaml:"wiki"`
+	Whitelist   WhitelistConfig   `yaml:"whitelist"`
+	Hooks       map[string]string `yaml:"hooks,omitempty"` // navn → shell-kommando
 }
 
 // KeyInFile returnerer true hvis api_key er sat direkte i config-filen.
@@ -82,6 +83,41 @@ func MissingKey(cfg *Config) bool {
 		return false // lokal provider — ingen nøgle nødvendig
 	}
 	return cfg.APIKey == ""
+}
+
+// MergeConfigs kombinerer global og lokal config. Lokal overskriver provider-indstillinger
+// hvis de er sat; whitelist og hooks er altid projekt-specifikke.
+func MergeConfigs(global, local *Config) *Config {
+	if global == nil && local == nil {
+		return &Config{}
+	}
+	if global == nil {
+		return local
+	}
+	if local == nil {
+		return global
+	}
+	merged := *global
+	if local.Provider != "" {
+		merged.Provider = local.Provider
+	}
+	if local.Model != "" {
+		merged.Model = local.Model
+	}
+	if local.BaseURL != "" {
+		merged.BaseURL = local.BaseURL
+	}
+	if local.APIKey != "" {
+		merged.APIKey = local.APIKey
+	}
+	if local.Wiki.Path != "" {
+		merged.Wiki = local.Wiki
+	}
+	merged.Whitelist = local.Whitelist
+	if local.Hooks != nil {
+		merged.Hooks = local.Hooks
+	}
+	return &merged
 }
 
 func NewFromConfig(cfg *Config) (Provider, error) {
