@@ -1,5 +1,14 @@
 # ekte
 
+```
+██████████    ██      ██    ██████████    ██████████
+██            ██    ██          ██        ██        
+████████      ██████            ██        ████████  
+██            ██    ██          ██        ██        
+██████████    ██      ██        ██        ██████████
+et agent harness med fokus på spec driven development
+```
+
 En personlig AI-assistent til softwareudvikling, bygget som et Go TUI-program.
 Køres direkte i terminalen — ingen browser, ingen cloud-dashboard.
 
