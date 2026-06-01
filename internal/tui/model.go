@@ -155,7 +155,13 @@ func (m *Model) ShowBanner() {
 		sb.WriteString("\n")
 	}
 	subtitleStyle := lipgloss.NewStyle().Foreground(colorSubtle)
-	sb.WriteString(subtitleStyle.Render("et agent harnes baseret på AIDD"))
+	subtitle := "et agent harness baseret på AIDD"
+	logoWidth := 42
+	padding := (logoWidth - lipgloss.Width(subtitle)) / 2
+	if padding > 0 {
+		sb.WriteString(strings.Repeat(" ", padding))
+	}
+	sb.WriteString(subtitleStyle.Render(subtitle))
 
 	m.bannerContent = sb.String()
 }
