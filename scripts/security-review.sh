@@ -6,7 +6,6 @@ cd "$(git rev-parse --show-toplevel)"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
 NC='\033[0m'
 
 FULL_REVIEW=false
@@ -19,6 +18,11 @@ fi
 
 if $FULL_REVIEW; then
   FILE_COUNT=$(find . -name "*.go" -not -path "*/vendor/*" | wc -l | tr -d ' ')
+  CODE_BYTES=$(find . -name "*.go" -not -path "*/vendor/*" | xargs cat 2>/dev/null | wc -c)
+  if [ "$CODE_BYTES" -gt 524288 ]; then
+    echo -e "${YELLOW}Kodebase > 512 KB — brug 'git push' (diff-review) i stedet.${NC}"
+    exit 1
+  fi
   echo "Indlæser $FILE_COUNT Go-filer til security review..."
   CODE=$(find . -name "*.go" -not -path "*/vendor/*" | sort | while IFS= read -r f; do
     printf '=== %s ===\n' "$f"
@@ -38,6 +42,8 @@ else
       exit 0
     fi
   fi
+  # Sanitér branch-navn: kun alfanumerisk + /_.-
+  UPSTREAM=$(printf '%s' "$UPSTREAM" | tr -cd '[:alnum:]/_.-')
   CODE=$(git diff "$UPSTREAM"..HEAD 2>/dev/null || echo "")
   if [ -z "$CODE" ]; then
     echo -e "${GREEN}Ingen upushede ændringer.${NC}"
@@ -48,39 +54,44 @@ else
   echo "Reviewe $COMMIT_COUNT upushede commits..."
 fi
 
-RESPONSE=$(claude --print "Du er en Go-sikkerhedsekspert (OWASP Top 10, CWE). Analyser følgende kode.
+# Byg prompt i tempfil for at undgå shell-expansion af kodeindhold (CWE-78)
+TMPFILE=$(mktemp)
+trap 'rm -f "$TMPFILE"' EXIT
 
-Kontekst: $CONTEXT
-
-<code>
-$CODE
-</code>
-
+printf '%s\n' "Du er en Go-sikkerhedsekspert (OWASP Top 10, CWE). Analyser følgende kode." > "$TMPFILE"
+printf '\nKontekst: %s\n' "$CONTEXT" >> "$TMPFILE"
+printf '\n<code>\n' >> "$TMPFILE"
+printf '%s\n' "$CODE" >> "$TMPFILE"
+printf '</code>\n\n' >> "$TMPFILE"
+cat >> "$TMPFILE" <<'STATIC'
 Returner KUN valid JSON uden markdown-wrapper:
 {
-  \"risk_level\": \"low|medium|high|critical\",
-  \"findings\": [
+  "risk_level": "low|medium|high|critical",
+  "findings": [
     {
-      \"severity\": \"low|medium|high|critical\",
-      \"file\": \"sti/til/fil.go\",
-      \"issue\": \"hvad problemet er\",
-      \"recommendation\": \"specifik rettelse\"
+      "severity": "low|medium|high|critical",
+      "file": "sti/til/fil.go",
+      "issue": "hvad problemet er",
+      "recommendation": "specifik rettelse"
     }
   ],
-  \"summary\": \"kort samlet vurdering på dansk\"
+  "summary": "kort samlet vurdering på dansk"
 }
 
-Ingen fund → findings tom liste, risk_level \"low\"." 2>/dev/null)
+Ingen fund → findings tom liste, risk_level "low".
+STATIC
 
-if ! echo "$RESPONSE" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
+RESPONSE=$(claude --print "$(cat "$TMPFILE")" 2>/dev/null)
+
+if ! printf '%s' "$RESPONSE" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
   echo -e "${YELLOW}Uventet svar fra Claude:${NC}"
-  echo "$RESPONSE"
+  printf '%s\n' "$RESPONSE"
   exit 1
 fi
 
-RISK=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['risk_level'])")
-SUMMARY=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['summary'])")
-FINDING_COUNT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['findings']))")
+RISK=$(printf '%s' "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['risk_level'])")
+SUMMARY=$(printf '%s' "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['summary'])")
+FINDING_COUNT=$(printf '%s' "$RESPONSE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['findings']))")
 
 echo ""
 case "$RISK" in
@@ -89,11 +100,11 @@ case "$RISK" in
   medium)   echo -e "${YELLOW}━━━ SECURITY: MEDIUM RISIKO — $FINDING_COUNT fund ━━━━━━━━${NC}" ;;
   *)        echo -e "${GREEN}━━━ SECURITY: LAV RISIKO — $FINDING_COUNT fund ━━━━━━━━━━━${NC}" ;;
 esac
-echo "$SUMMARY"
+printf '%s\n' "$SUMMARY"
 echo ""
 
 if [ "$FINDING_COUNT" -gt 0 ]; then
-  echo "$RESPONSE" | python3 -c "
+  printf '%s' "$RESPONSE" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 SEV_COLOR = {
