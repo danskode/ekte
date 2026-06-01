@@ -6,7 +6,7 @@
   ████████ ███████       ██       ████████
   ██       ██    ██      ██       ██      
    ██████  ██      ██    ██████    ██████ 
-et agent harnes baseret på AIDD
+     et agent harness baseret på AIDD
 ```
 
 En personlig AI-assistent til softwareudvikling, bygget som et Go TUI-program.
