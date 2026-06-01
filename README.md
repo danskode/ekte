@@ -1,12 +1,12 @@
 # ekte
 
 ```
-              ██                ██                  
-  ███████     ██    ██      ████████        ███████ 
-  ██          ███████           ██          ██      
-  ███████     ██    ██          ██          ███████ 
-  ███████     ██      ██        ██████      ███████ 
-et agent harness med fokus på spec driven development
+           ██            ██               
+   █████   ██    ██  ████████      █████  
+  ████████ ███████       ██       ████████
+  ██       ██    ██      ██       ██      
+   ██████  ██      ██    ██████    ██████ 
+et agent harnes baseret på AIDD
 ```
 
 En personlig AI-assistent til softwareudvikling, bygget som et Go TUI-program.
