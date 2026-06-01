@@ -16,9 +16,10 @@ type Result struct {
 	Ok          bool
 }
 
-// IsFirstRun returnerer true hvis .ekte/ ikke eksisterer i den givne mappe.
+// IsFirstRun returnerer true hvis global config (~/.ekte/config.yaml) ikke eksisterer endnu.
 func IsFirstRun(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, ".ekte"))
+	home, _ := os.UserHomeDir()
+	_, err := os.Stat(filepath.Join(home, ".ekte", "config.yaml"))
 	return os.IsNotExist(err)
 }
 

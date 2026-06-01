@@ -27,6 +27,9 @@ vendor/
 # Diagnostik
 cmd/keytest/
 
+# Test-mapper oprettet af agenten
+TEST/
+
 # Udviklingsnoter (lokal, deles ikke — ekte-session-prompt.md og al kontekst herunder)
 .dev/
 
