@@ -162,10 +162,22 @@ func Execute(call provider.ToolCall, root string, canRead, canWrite bool) (strin
 	}
 }
 
+// sensitivePatterns er stier der altid afvises for read_file — selv inden for projektmappen.
+var sensitivePatterns = []string{
+	".ssh/", ".aws/", ".gnupg/", ".netrc", ".git-credentials",
+	"id_rsa", "id_ed25519", "id_ecdsa",
+}
+
 func readFile(args map[string]any, root string) (string, error) {
 	path, _ := args["path"].(string)
 	if path == "" {
 		return "", fmt.Errorf("path mangler")
+	}
+	lower := strings.ToLower(path)
+	for _, pat := range sensitivePatterns {
+		if strings.Contains(lower, pat) {
+			return "", fmt.Errorf("læsning af %s er ikke tilladt", path)
+		}
 	}
 	abs, err := safePath(root, path)
 	if err != nil {
@@ -175,17 +187,23 @@ func readFile(args map[string]any, root string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("kan ikke læse %s: %w", path, err)
 	}
-	// Begræns output til 200 linjer for ikke at sprænge kontekstvinduet
+	// Begræns til 64 KB for at undgå enorme LLM-kontekster
+	const maxBytes = 64 * 1024
+	truncated := false
+	if len(data) > maxBytes {
+		data = data[:maxBytes]
+		truncated = true
+	}
+	// Begræns output til 200 linjer
 	lines := strings.Split(string(data), "\n")
 	const maxLines = 200
-	truncated := false
 	if len(lines) > maxLines {
 		lines = lines[:maxLines]
 		truncated = true
 	}
 	out := strings.Join(lines, "\n")
 	if truncated {
-		out += fmt.Sprintf("\n\n[... fil afkortet ved %d linjer]", maxLines)
+		out += fmt.Sprintf("\n\n[... fil afkortet]")
 	}
 	return out, nil
 }
