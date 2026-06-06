@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/danskode/ekte/internal/agent"
+	"github.com/danskode/ekte/internal/ektelog"
 	"github.com/danskode/ekte/internal/git"
 	"github.com/danskode/ekte/internal/obs"
 	"github.com/danskode/ekte/internal/onboarding"
@@ -111,11 +112,23 @@ func runTUI() {
 	obsPath := filepath.Join(sessionDir, sessionID+"_obs.jsonl")
 	recorder := obs.NewRecorder(obsPath, sessionDir)
 
+	logPath := filepath.Join(sessionDir, sessionID+".log")
+	logger, err := ektelog.New(logPath, ektelog.DEBUG)
+	if err != nil {
+		logger = ektelog.Discard()
+	}
+	defer logger.Close()
+
 	providerName := ""
 	modelName := ""
 	if cfg != nil {
 		providerName = cfg.Provider
 		modelName = cfg.Model
+	}
+
+	contextSize := 0
+	if cfg != nil && cfg.ContextSize > 0 {
+		contextSize = cfg.ContextSize
 	}
 
 	a := agent.New(agent.Config{
@@ -128,18 +141,16 @@ func runTUI() {
 		Whitelist:    whitelist,
 		Hooks:        hooks,
 		Obs:          recorder,
+		Log:          logger,
+		AgentName:    profile.AgentName,
+		ContextSize:  contextSize,
 		ProviderName: providerName,
 		ModelName:    modelName,
 	})
 
 	m := tui.New(a)
 	m.SetNames(profile.UserName, profile.AgentName)
-
-	maxCtx := 0
-	if cfg != nil && cfg.ContextSize > 0 {
-		maxCtx = cfg.ContextSize
-	}
-	m.SetMaxTokens(maxCtx)
+	m.SetMaxTokens(contextSize)
 
 	if provider.KeyInFile(globalConfigPath) || provider.KeyInFile(localConfigPath) {
 		m.AddWarning("⚠  API-nøgle fundet i config-fil — flyt den til env-variabel:\nexport ANTHROPIC_API_KEY=\"din-nøgle\"  (tilføj til ~/.bashrc)")
@@ -153,6 +164,9 @@ func runTUI() {
 	}
 
 	m.ShowBanner()
+	if logger.Path != "" {
+		m.AddInfo("📋 log: " + logger.Path)
+	}
 	if isFirstRun {
 		m.SetWelcome(welcomeName)
 	}

@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/danskode/ekte/internal/dep"
+	"github.com/danskode/ekte/internal/ektelog"
 	"github.com/danskode/ekte/internal/git"
 	"github.com/danskode/ekte/internal/obs"
 	"github.com/danskode/ekte/internal/provider"
@@ -32,26 +34,38 @@ const (
 	EventStreamToken                 // streaming: et token fra LLM
 	EventStreamDone                  // streaming: fuldt svar klar (Content = hele teksten)
 	EventForresten                   // svar fra /forresten subagent
+	EventThinking                    // modellen er i gang med at ræsonnere
+	EventToolConfirm                 // anmoder om brugerbekræftelse før filhandling
 )
 
+const maxHistoryMessages = 20 // maks non-system beskeder der sendes til LLM
+
+const baseSystemPrompt = "Du er en hjælpsom AI-assistent i ekte, et developer harness. " +
+	"Svar altid på dansk med mindre brugeren eksplicit beder om et andet sprog. " +
+	"Vær præcis og konkret — udfør opgaver direkte med tools i stedet for at forklare hvad du vil gøre."
+
 type Event struct {
-	Type    EventType
-	Content string
-	Tokens  int
-	Prefill string // hvis sat, pre-udfyld inputfeltet i TUI
-	Source  string // wiki-kilde, vises efter svaret
+	Type      EventType
+	Content   string
+	Tokens    int
+	Prefill   string    // hvis sat, pre-udfyld inputfeltet i TUI
+	Source    string    // wiki-kilde, vises efter svaret
+	ConfirmCh chan bool  // kun EventToolConfirm: send true/false for at bekræfte/afvise
 }
 
 type Config struct {
-	Provider   provider.Provider
-	Wiki       *wiki.Wiki
-	RepoRoot   string
-	WorkDir    string // rod for filoperationer — altid cwd ved opstart
-	SessionDir string
-	Skills     []skill.Skill
-	Whitelist  provider.WhitelistConfig
-	Hooks      map[string]string
-	Obs        *obs.Recorder
+	Provider    provider.Provider
+	Wiki        *wiki.Wiki
+	RepoRoot    string
+	WorkDir     string // rod for filoperationer — altid cwd ved opstart
+	SessionDir  string
+	Skills      []skill.Skill
+	Whitelist   provider.WhitelistConfig
+	Hooks       map[string]string
+	Obs         *obs.Recorder
+	Log         *ektelog.Logger
+	AgentName   string
+	ContextSize int // maks tokens for modellen (0 = ukendt)
 	// ProviderName og Model bruges til obs-logging
 	ProviderName string
 	ModelName    string
@@ -75,7 +89,22 @@ type obsBreakdown struct {
 }
 
 func New(cfg Config) *Agent {
-	return &Agent{cfg: cfg}
+	if cfg.Log == nil {
+		cfg.Log = ektelog.Discard()
+	}
+	a := &Agent{cfg: cfg}
+	a.messages = append(a.messages, provider.Message{Role: "system", Content: baseSystemPrompt})
+	cfg.Log.Info("agent initialiseret", "provider", cfg.ProviderName, "model", cfg.ModelName)
+	return a
+}
+
+func (a *Agent) log() *ektelog.Logger { return a.cfg.Log }
+
+func (a *Agent) agentPrefix() string {
+	if a.cfg.AgentName != "" {
+		return a.cfg.AgentName + " "
+	}
+	return ""
 }
 
 func (a *Agent) Messages() []provider.Message        { return a.messages }
@@ -125,6 +154,7 @@ func (a *Agent) handleChat(ctx context.Context, input string) []Event {
 
 	msgs := a.messagesWithSkill()
 	a.clearSkill()
+	msgs = trimHistory(msgs, maxHistoryMessages)
 
 	resp, err := a.cfg.Provider.Chat(ctx, msgs)
 	if err != nil {
@@ -133,7 +163,7 @@ func (a *Agent) handleChat(ctx context.Context, input string) []Event {
 
 	a.recordTurn(input, resp, msgs, -1)
 	a.messages = append(a.messages, provider.Message{Role: "assistant", Content: resp.Content})
-	a.tokenCount = estimateTokens(a.messages)
+	a.tokenCount = actualOrEstimate(resp, a.messages)
 
 	return []Event{
 		{Type: EventAssistant, Content: resp.Content},
@@ -177,11 +207,16 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 
 	msgs := a.messagesWithSkill()
 	a.clearSkill()
+	beforeTrim := len(msgs)
+	msgs = trimHistory(msgs, maxHistoryMessages)
+	if len(msgs) < beforeTrim {
+		a.log().Info("historik trimmet", "messages_før", beforeTrim, "messages_efter", len(msgs))
+	}
 
 	// Injicér wiki som autoritativ kilde — skal altid prioriteres over generel viden
 	var wikiSource string
 	wikiIdx := -1
-	if a.cfg.Wiki != nil {
+	if a.cfg.Wiki != nil && wiki.HasSubstantiveQuery(input) {
 		_, pages, err := a.cfg.Wiki.Query(input)
 		if err == nil && len(pages) > 0 {
 			var ctxBuilder strings.Builder
@@ -204,80 +239,230 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 		workdir, _ = os.Getwd()
 	}
 
-	// Tool-loop: kør til LLM stopper med at kalde tools
-	for {
-		if len(toolDefs) > 0 {
-			// Brug ChatWithTools (ikke streaming) når tools er aktive —
-			// streaming og tool calls kombineres ikke i denne version
-			resp, err := a.cfg.Provider.ChatWithTools(ctx, msgs, toolDefs)
-			if err != nil {
-				ch <- Event{Type: EventError, Content: "LLM-fejl: " + err.Error()}
-				return
-			}
+	// Første kald streamer altid — tool calls akkumuleres og håndteres bagefter.
+	tokEst := estimateTokens(msgs)
+	ctxLog := []any{"messages", len(msgs), "tokens_est", tokEst, "tools", len(toolDefs), "model", a.cfg.ModelName}
+	if a.cfg.ContextSize > 0 {
+		ctxLog = append(ctxLog, "ctx_size", a.cfg.ContextSize, "ctx_pct", fmt.Sprintf("%.0f%%", float64(tokEst)/float64(a.cfg.ContextSize)*100))
+	}
+	a.log().Info("stream start", ctxLog...)
+	streamStart := time.Now()
 
-			if len(resp.ToolCalls) == 0 {
-				// Intet tool call — vis svar og afslut
-				a.recordTurn(input, resp, msgs, wikiIdx)
-				a.messages = append(a.messages, provider.Message{Role: "assistant", Content: resp.Content})
-				a.tokenCount = estimateTokens(a.messages)
-				ch <- Event{Type: EventStreamDone, Content: resp.Content, Source: wikiSource}
-				ch <- Event{Type: EventTokenCount, Tokens: a.tokenCount}
-				return
-			}
+	eventCh, err := a.cfg.Provider.StreamWithTools(ctx, msgs, toolDefs)
+	if err != nil {
+		a.log().Error("stream fejl", "error", err)
+		ch <- Event{Type: EventError, Content: "LLM-fejl: " + err.Error()}
+		return
+	}
 
-			// Eksekver tool calls og send output til tool-panel
-			assistantMsg := provider.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls}
-			msgs = append(msgs, assistantMsg)
+	var sb strings.Builder
+	var finalToolCalls []provider.ToolCall
+	tokenCount := 0
 
-			var toolLog strings.Builder
-			for _, tc := range resp.ToolCalls {
-				result, err := tools.Execute(tc, workdir, a.cfg.Whitelist.FileRead, a.cfg.Whitelist.FileWrite)
-				if err != nil {
-					result = "Fejl: " + err.Error()
-				}
-				toolLog.WriteString(fmt.Sprintf("tool: %s\n%s\n\n", tc.Name, result))
-				msgs = append(msgs, provider.Message{
-					Role:       "tool",
-					Content:    result,
-					ToolCallID: tc.ID,
-				})
-			}
-			ch <- Event{Type: EventToolOutput, Content: strings.TrimRight(toolLog.String(), "\n")}
-
-			// Fortsæt loop — LLM skal svare på tool-resultater
+	for ev := range eventCh {
+		if ev.Done {
+			finalToolCalls = ev.ToolCalls
 			continue
 		}
-
-		// Ingen tools tilgængelige — stream direkte
-		tokenCh, err := a.cfg.Provider.Stream(ctx, msgs)
-		if err != nil {
-			ch <- Event{Type: EventError, Content: "LLM-fejl: " + err.Error()}
-			return
+		if ev.Token == "" {
+			continue
 		}
+		sb.WriteString(ev.Token)
+		tokenCount++
+		ch <- Event{Type: EventStreamToken, Content: ev.Token}
+	}
 
-		var sb strings.Builder
-		for token := range tokenCh {
-			sb.WriteString(token)
-			ch <- Event{Type: EventStreamToken, Content: token}
-		}
+	// rawFull bevares med think-tags til msgs — modellen skal se sin egen ræsonnering
+	// i efterfølgende runder, så den husker sin plan (fx "nu kalder jeg edit_file").
+	// full (strippet) bruges kun til visning.
+	rawFull := sb.String()
+	full := stripThinkTags(rawFull)
+	a.log().Info("stream slut",
+		"tokens", tokenCount,
+		"content_len", len(full),
+		"tool_calls", len(finalToolCalls),
+		"duration_ms", time.Since(streamStart).Milliseconds(),
+	)
 
-		full := sb.String()
+	if len(finalToolCalls) == 0 {
+		// Ingen tool calls — streaming færdig
 		if full == "" {
+			a.log().Warn("tom respons fra LLM")
 			ch <- Event{Type: EventError, Content: "Tom respons fra LLM."}
 			return
 		}
-
-		// Streaming giver ikke usage fra API — estimér ud fra input-messages og output-længde
-		streamResp := &provider.Response{Content: full, Usage: provider.Usage{
-			InputTokens:  estimateTokens(msgs),
-			OutputTokens: len(full) / 4,
-		}}
+		streamResp := &provider.Response{Content: full}
 		a.recordTurn(input, streamResp, msgs, wikiIdx)
 		a.messages = append(a.messages, provider.Message{Role: "assistant", Content: full})
 		a.tokenCount = estimateTokens(a.messages)
 		ch <- Event{Type: EventStreamDone, Content: full, Source: wikiSource}
 		ch <- Event{Type: EventTokenCount, Tokens: a.tokenCount}
 		return
+	}
+
+	// Tool calls fundet — eksekver i loop indtil ingen flere tool calls (maks 8 runder).
+	// Brug rawFull (med think-tags) i msgs så modellen beholder sin ræsonnering.
+	msgs = append(msgs, provider.Message{Role: "assistant", Content: rawFull, ToolCalls: finalToolCalls})
+	pendingCalls := finalToolCalls
+
+	// Cache: undgå at køre identiske tool calls igen
+	toolCache := map[string]string{}
+	seenRoundKeys := map[string]bool{}
+
+	for round := 0; round < 8; round++ {
+		// Detektér løkke: hvis denne kombination af kald er set før, stop
+		roundKey := toolCallsKey(pendingCalls)
+		if seenRoundKeys[roundKey] {
+			a.log().Warn("løkke detekteret", "round", round, "calls", roundKey)
+			ch <- Event{Type: EventError, Content: "Modellen sidder i en løkke — afbryder. Prøv at omformulere din besked."}
+			return
+		}
+		seenRoundKeys[roundKey] = true
+		a.log().Info("tool runde", "round", round, "calls", len(pendingCalls))
+
+		var toolLog strings.Builder
+		for _, tc := range pendingCalls {
+			// Cache: returner tidligere resultat for identiske kald
+			cacheKey := tc.Name + "|" + string(tc.Input)
+			if cached, seen := toolCache[cacheKey]; seen {
+				a.log().Warn("tool cache hit (duplikat)", "tool", tc.Name, "args", string(tc.Input))
+				ch <- Event{Type: EventSystem, Content: "↩ " + toolActivityLine(tc, cached) + " (allerede gjort)"}
+				msgs = append(msgs, provider.Message{Role: "tool", Content: cached, ToolCallID: tc.ID})
+				continue
+			}
+
+			// Skriveoperationer kræver brugerbekræftelse
+			if tc.Name == "write_file" || tc.Name == "edit_file" || tc.Name == "create_dir" {
+				a.log().Info("tool confirm", "tool", tc.Name, "args", string(tc.Input))
+				desc := toolConfirmDesc(tc)
+				confirmCh := make(chan bool, 1)
+				ch <- Event{Type: EventToolConfirm, Content: desc, ConfirmCh: confirmCh}
+				if !<-confirmCh {
+					a.log().Info("tool afvist af bruger", "tool", tc.Name)
+					ch <- Event{Type: EventSystem, Content: "↩ " + tc.Name + " afvist"}
+					msgs = append(msgs, provider.Message{Role: "tool", Content: "Afvist af bruger.", ToolCallID: tc.ID})
+					continue
+				}
+			}
+
+			t0 := time.Now()
+			a.log().Debug("tool exec", "tool", tc.Name, "args", string(tc.Input))
+			result, err := tools.Execute(tc, workdir, a.cfg.Whitelist.FileRead, a.cfg.Whitelist.FileWrite)
+			if err != nil {
+				a.log().Error("tool fejl", "tool", tc.Name, "error", err, "duration_ms", time.Since(t0).Milliseconds())
+				result = "Fejl: " + err.Error()
+				ch <- Event{Type: EventSystem, Content: a.agentPrefix() + "✗ " + toolActivityLine(tc, result)}
+			} else {
+				a.log().Info("tool ok", "tool", tc.Name, "result_len", len(result), "duration_ms", time.Since(t0).Milliseconds())
+				toolCache[cacheKey] = result
+				ch <- Event{Type: EventSystem, Content: a.agentPrefix() + toolActivityLine(tc, result)}
+				// Option 2: Hint efter read_file så modellen går direkte til edit_file
+				if tc.Name == "read_file" {
+					result += "\n\n[Filen er læst i sin helhed. Brug nu edit_file direkte — søg ikke yderligere i filen.]"
+				}
+			}
+			toolLog.WriteString(fmt.Sprintf("tool: %s\n%s\n\n", tc.Name, result))
+			msgs = append(msgs, provider.Message{Role: "tool", Content: result, ToolCallID: tc.ID})
+		}
+		ch <- Event{Type: EventToolOutput, Content: strings.TrimRight(toolLog.String(), "\n")}
+		ch <- Event{Type: EventThinking} // vis hjerneanimation under LLM-opkaldet
+
+		t0 := time.Now()
+		followTokEst := estimateTokens(msgs)
+		followLog := []any{"round", round, "messages", len(msgs), "tokens_est", followTokEst}
+		if a.cfg.ContextSize > 0 {
+			followLog = append(followLog, "ctx_pct", fmt.Sprintf("%.0f%%", float64(followTokEst)/float64(a.cfg.ContextSize)*100))
+		}
+		a.log().Info("followup start", followLog...)
+		resp, err := a.cfg.Provider.ChatWithTools(ctx, msgs, toolDefs)
+		if err != nil {
+			a.log().Error("followup fejl", "round", round, "error", err, "duration_ms", time.Since(t0).Milliseconds())
+			ch <- Event{Type: EventError, Content: "LLM-fejl (tool follow-up): " + err.Error()}
+			return
+		}
+		finalContent := stripThinkTags(resp.Content)
+		a.log().Info("followup svar",
+			"round", round,
+			"content_len", len(finalContent),
+			"tool_calls", len(resp.ToolCalls),
+			"duration_ms", time.Since(t0).Milliseconds(),
+		)
+		if len(resp.ToolCalls) == 0 {
+			// Ingen flere tool calls — send endeligt svar
+			a.recordTurn(input, resp, msgs, wikiIdx)
+			a.messages = append(a.messages, provider.Message{Role: "assistant", Content: finalContent})
+			a.tokenCount = actualOrEstimate(resp, a.messages)
+			ch <- Event{Type: EventStreamDone, Content: finalContent, Source: wikiSource}
+			ch <- Event{Type: EventTokenCount, Tokens: a.tokenCount}
+			return
+		}
+		// Endnu en runde tool calls
+		msgs = append(msgs, provider.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
+		pendingCalls = resp.ToolCalls
+	}
+	a.log().Warn("maks tool-runder nået")
+	ch <- Event{Type: EventError, Content: "Maks antal tool-runder nået — prøv at omformulere din besked."}
+}
+
+// toolCallsKey laver en deterministisk streng-nøgle for en liste af tool calls.
+func toolCallsKey(calls []provider.ToolCall) string {
+	var sb strings.Builder
+	for _, tc := range calls {
+		sb.WriteString(tc.Name)
+		sb.WriteByte('|')
+		sb.Write(tc.Input)
+		sb.WriteByte(';')
+	}
+	return sb.String()
+}
+
+func toolActivityLine(tc provider.ToolCall, result string) string {
+	var args map[string]any
+	if json.Unmarshal(tc.Input, &args) != nil {
+		return tc.Name
+	}
+	path, _ := args["path"].(string)
+	switch tc.Name {
+	case "read_file":
+		return "læste " + path
+	case "search_files":
+		pattern, _ := args["pattern"].(string)
+		return "søgte efter " + pattern
+	case "write_file":
+		return "oprettede " + path
+	case "edit_file":
+		return "redigerede " + path
+	case "create_dir":
+		return "oprettede mappe " + path
+	default:
+		return tc.Name
+	}
+}
+
+func toolConfirmDesc(tc provider.ToolCall) string {
+	var args map[string]any
+	if json.Unmarshal(tc.Input, &args) != nil {
+		return tc.Name
+	}
+	path, _ := args["path"].(string)
+	if path == "" {
+		return tc.Name
+	}
+	switch tc.Name {
+	case "edit_file":
+		if insertAfter, ok := args["insert_after"].(string); ok && insertAfter != "" {
+			if len(insertAfter) > 40 {
+				insertAfter = insertAfter[:40] + "…"
+			}
+			return fmt.Sprintf("edit_file → %s  (indsæt efter: %q)", path, insertAfter)
+		}
+		old, _ := args["old_string"].(string)
+		if len(old) > 40 {
+			old = old[:40] + "…"
+		}
+		return fmt.Sprintf("edit_file → %s  (erstatter: %q)", path, old)
+	default:
+		return tc.Name + " → " + path
 	}
 }
 
@@ -733,6 +918,49 @@ func (a *Agent) messagesWithSkill() []provider.Message {
 }
 
 func (a *Agent) clearSkill() { a.activeSkill = nil }
+
+// trimHistory begrænser hvad der sendes til LLM: system-beskeder bevares altid,
+// kun de seneste maxNonSystem user/assistant-beskeder medtages.
+func trimHistory(msgs []provider.Message, maxNonSystem int) []provider.Message {
+	var sys, conv []provider.Message
+	for _, m := range msgs {
+		if m.Role == "system" {
+			sys = append(sys, m)
+		} else {
+			conv = append(conv, m)
+		}
+	}
+	if len(conv) > maxNonSystem {
+		conv = conv[len(conv)-maxNonSystem:]
+	}
+	return append(sys, conv...)
+}
+
+// stripThinkTags fjerner <think>...</think>-blokke fra teksten så de ikke ender i historikken.
+func stripThinkTags(s string) string {
+	const open, close = "<think>", "</think>"
+	for {
+		start := strings.Index(s, open)
+		if start == -1 {
+			break
+		}
+		end := strings.Index(s[start:], close)
+		if end == -1 {
+			s = s[:start]
+			break
+		}
+		s = s[:start] + s[start+end+len(close):]
+	}
+	return strings.TrimSpace(s)
+}
+
+// actualOrEstimate bruger API-rapporterede token-tal hvis tilgængelige, ellers estimat.
+func actualOrEstimate(resp *provider.Response, messages []provider.Message) int {
+	if resp.Usage.InputTokens > 0 {
+		return resp.Usage.InputTokens + resp.Usage.OutputTokens
+	}
+	return estimateTokens(messages)
+}
 
 func estimateTokens(messages []provider.Message) int {
 	total := 0

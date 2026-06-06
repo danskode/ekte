@@ -71,8 +71,11 @@ func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
 				},
 			},
 			provider.ToolDefinition{
-				Name:        "edit_file",
-				Description: "Erstat en præcis tekststreng i en eksisterende fil. Fejler hvis old_string ikke findes eller forekommer mere end én gang.",
+				Name: "edit_file",
+				Description: "Rediger en eksisterende fil. To tilstande: " +
+					"(1) old_string + new_string: erstat præcis tekst — old_string skal være unik i filen. " +
+					"(2) insert_after + new_string: indsæt ny tekst lige efter en markør-linje uden at erstatte noget. " +
+					"Brug insert_after når du tilføjer nyt indhold (fx en ny tag) frem for at ændre eksisterende.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -82,14 +85,18 @@ func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
 						},
 						"old_string": map[string]any{
 							"type":        "string",
-							"description": "Den eksakte tekst der skal erstattes — skal være unik i filen",
+							"description": "Tilstand 1: den eksakte tekst der erstattes — skal forekomme præcis én gang i filen",
+						},
+						"insert_after": map[string]any{
+							"type":        "string",
+							"description": "Tilstand 2: markør-tekst at indsætte new_string efter — intet slettes",
 						},
 						"new_string": map[string]any{
 							"type":        "string",
-							"description": "Teksten der erstatter old_string",
+							"description": "Teksten der indsættes (erstatter old_string, eller tilføjes efter insert_after)",
 						},
 					},
-					"required": []string{"path", "old_string", "new_string"},
+					"required": []string{"path", "new_string"},
 				},
 			},
 			provider.ToolDefinition{
@@ -217,9 +224,25 @@ func searchFiles(args map[string]any, root string) (string, error) {
 		}
 		if contains != "" {
 			data, err := os.ReadFile(path)
-			if err != nil || !strings.Contains(string(data), contains) {
+			if err != nil {
 				return nil
 			}
+			text := string(data)
+			if !strings.Contains(text, contains) {
+				return nil
+			}
+			// Returner matchende linjer med linjenummer og kontekst
+			var lineMatches []string
+			for i, line := range strings.Split(text, "\n") {
+				if strings.Contains(line, contains) {
+					lineMatches = append(lineMatches, fmt.Sprintf("  linje %d: %s", i+1, strings.TrimSpace(line)))
+				}
+			}
+			matches = append(matches, rel+"\n"+strings.Join(lineMatches, "\n"))
+			if len(matches) >= 50 {
+				return filepath.SkipAll
+			}
+			return nil
 		}
 		matches = append(matches, rel)
 		if len(matches) >= 50 {
@@ -258,12 +281,13 @@ func writeFile(args map[string]any, root string) (string, error) {
 func editFile(args map[string]any, root string) (string, error) {
 	path, _ := args["path"].(string)
 	oldStr, _ := args["old_string"].(string)
+	insertAfter, _ := args["insert_after"].(string)
 	newStr, _ := args["new_string"].(string)
 	if path == "" {
 		return "", fmt.Errorf("path mangler")
 	}
-	if oldStr == "" {
-		return "", fmt.Errorf("old_string mangler")
+	if oldStr == "" && insertAfter == "" {
+		return "", fmt.Errorf("old_string eller insert_after mangler")
 	}
 	abs, err := safePath(root, path)
 	if err != nil {
@@ -274,14 +298,26 @@ func editFile(args map[string]any, root string) (string, error) {
 		return "", fmt.Errorf("kan ikke læse %s: %w", path, err)
 	}
 	content := string(data)
-	count := strings.Count(content, oldStr)
-	if count == 0 {
-		return "", fmt.Errorf("old_string ikke fundet i %s", path)
+
+	var updated string
+	if insertAfter != "" {
+		idx := strings.Index(content, insertAfter)
+		if idx == -1 {
+			return "", fmt.Errorf("insert_after-markør ikke fundet i %s", path)
+		}
+		pos := idx + len(insertAfter)
+		updated = content[:pos] + newStr + content[pos:]
+	} else {
+		count := strings.Count(content, oldStr)
+		if count == 0 {
+			return "", fmt.Errorf("old_string ikke fundet i %s", path)
+		}
+		if count > 1 {
+			return "", fmt.Errorf("old_string forekommer %d gange i %s — gør den mere specifik", count, path)
+		}
+		updated = strings.Replace(content, oldStr, newStr, 1)
 	}
-	if count > 1 {
-		return "", fmt.Errorf("old_string forekommer %d gange i %s — gør den mere specifik", count, path)
-	}
-	updated := strings.Replace(content, oldStr, newStr, 1)
+
 	if err := os.WriteFile(abs, []byte(updated), 0644); err != nil {
 		return "", fmt.Errorf("kan ikke skrive %s: %w", path, err)
 	}
