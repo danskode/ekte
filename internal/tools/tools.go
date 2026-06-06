@@ -231,10 +231,15 @@ func searchFiles(args map[string]any, root string) (string, error) {
 			if !strings.Contains(text, contains) {
 				return nil
 			}
-			// Returner matchende linjer med linjenummer og kontekst
+			// Returner matchende linjer med linjenummer (maks 20 pr. fil)
+			const maxLinesPerFile = 20
 			var lineMatches []string
 			for i, line := range strings.Split(text, "\n") {
 				if strings.Contains(line, contains) {
+					if len(lineMatches) >= maxLinesPerFile {
+						lineMatches = append(lineMatches, "  ... (yderligere forekomster ikke vist)")
+						break
+					}
 					lineMatches = append(lineMatches, fmt.Sprintf("  linje %d: %s", i+1, strings.TrimSpace(line)))
 				}
 			}

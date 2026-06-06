@@ -48,15 +48,17 @@ func (l *Logger) write(level Level, msg string, kv []any) {
 		return
 	}
 	ts := time.Now().Format("2006-01-02 15:04:05.000")
+	san := func(s string) string { return strings.ReplaceAll(s, "\n", "\\n") }
 	var sb strings.Builder
 	sb.WriteString(ts)
 	sb.WriteByte(' ')
 	sb.WriteString(levelLabel[level])
 	sb.WriteString("  ")
-	sb.WriteString(msg)
+	sb.WriteString(san(msg))
 	for i := 0; i+1 < len(kv); i += 2 {
-		v := strings.ReplaceAll(fmt.Sprintf("%v", kv[i+1]), "\n", "\\n")
-		sb.WriteString(fmt.Sprintf("  %v=%s", kv[i], v))
+		k := san(fmt.Sprintf("%v", kv[i]))
+		v := san(fmt.Sprintf("%v", kv[i+1]))
+		sb.WriteString(fmt.Sprintf("  %s=%s", k, v))
 	}
 	sb.WriteByte('\n')
 
