@@ -164,8 +164,11 @@ func Execute(call provider.ToolCall, root string, canRead, canWrite bool) (strin
 
 // sensitivePatterns er stier der altid afvises for read_file — selv inden for projektmappen.
 var sensitivePatterns = []string{
-	".ssh/", ".aws/", ".gnupg/", ".netrc", ".git-credentials",
-	"id_rsa", "id_ed25519", "id_ecdsa",
+	".ssh", ".aws", ".gnupg", ".netrc", ".git-credentials",
+	"id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_xmss",
+	".npmrc", ".docker", ".pypirc",
+	".bash_history", ".zsh_history", ".sh_history",
+	"credentials", ".config/gh",
 }
 
 func readFile(args map[string]any, root string) (string, error) {
