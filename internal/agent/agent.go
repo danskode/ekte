@@ -327,6 +327,9 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 
 		var toolLog strings.Builder
 		for _, tc := range pendingCalls {
+			if ctx.Err() != nil {
+				return
+			}
 			// Cache: returner tidligere resultat for identiske kald
 			cacheKey := tc.Name + "\x00" + string(tc.Input)
 			if cached, seen := toolCache[cacheKey]; seen {
