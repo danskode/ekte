@@ -301,10 +301,14 @@ func editFile(args map[string]any, root string) (string, error) {
 
 	var updated string
 	if insertAfter != "" {
-		idx := strings.Index(content, insertAfter)
-		if idx == -1 {
+		count := strings.Count(content, insertAfter)
+		if count == 0 {
 			return "", fmt.Errorf("insert_after-markør ikke fundet i %s", path)
 		}
+		if count > 1 {
+			return "", fmt.Errorf("insert_after-markør forekommer %d gange i %s — gør den mere specifik", count, path)
+		}
+		idx := strings.Index(content, insertAfter)
 		pos := idx + len(insertAfter)
 		updated = content[:pos] + newStr + content[pos:]
 	} else {

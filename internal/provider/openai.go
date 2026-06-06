@@ -3,7 +3,9 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -133,9 +135,13 @@ func (p *OpenAIProvider) StreamWithTools(ctx context.Context, messages []Message
 			arguments string
 		}
 		accumulated := map[int]*accTC{}
+		var streamErr error
 		for {
 			resp, err := stream.Recv()
 			if err != nil {
+				if !errors.Is(err, io.EOF) {
+					streamErr = err
+				}
 				break
 			}
 			if len(resp.Choices) == 0 {
@@ -160,6 +166,10 @@ func (p *OpenAIProvider) StreamWithTools(ctx context.Context, messages []Message
 				acc.name += tc.Function.Name
 				acc.arguments += tc.Function.Arguments
 			}
+		}
+		if streamErr != nil {
+			ch <- StreamEvent{Done: true, Err: streamErr}
+			return
 		}
 		final := StreamEvent{Done: true}
 		for i := 0; i < len(accumulated); i++ {
