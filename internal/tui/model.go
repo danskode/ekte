@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -46,9 +48,17 @@ type Model struct {
 	suggestions   []string
 	suggestionIdx int
 
-	streaming bool
-	streamBuf string
-	streamCh  <-chan agent.Event
+	streaming    bool
+	streamBuf    string
+	streamCh     <-chan agent.Event
+	streamStart  time.Time
+	cancelStream context.CancelFunc
+	thinking     bool
+	thinkPos     int
+
+	pendingConfirm bool
+	confirmCh      chan bool
+	confirmDesc    string
 
 	tokenCount int
 	maxTokens  int
@@ -98,6 +108,13 @@ func (m *Model) AddWarning(msg string) {
 	m.messages = append(m.messages, provider.Message{
 		Role:    "system",
 		Content: styleError.Render(msg),
+	})
+}
+
+func (m *Model) AddInfo(msg string) {
+	m.messages = append(m.messages, provider.Message{
+		Role:    "system",
+		Content: msg,
 	})
 }
 
@@ -181,11 +198,19 @@ func (m *Model) SetWelcome(projectName string) {
 	m.messages = append(m.messages, provider.Message{Role: "assistant", Content: welcome})
 }
 
-func (m Model) conversationContent() string {
-	w := m.conversation.Width
+func (m Model) conversationWidth() int {
+	w := m.width - 4 // 2 til border + 2 padding
+	if m.toolOutput != "" {
+		w = m.width - toolPanelWidth - 1 - 4
+	}
 	if w <= 0 {
 		w = 80
 	}
+	return w
+}
+
+func (m Model) conversationContent() string {
+	w := m.conversationWidth()
 	var sb strings.Builder
 	if m.bannerContent != "" {
 		sb.WriteString(m.bannerContent + "\n\n")
@@ -231,12 +256,32 @@ func (m Model) conversationContent() string {
 			lipgloss.NewStyle().Foreground(colorBorder).Render("────") + "  " +
 			styleSystem.Render("venter...") + "\n\n")
 	}
-	if m.streaming && m.streamBuf != "" {
+	if m.streaming && m.streamBuf == "" {
+		header := m.msgHeader(styleAssistantLabel.Render("🤖 "+agentName), w)
+		sb.WriteString(header + "\n" + m.thinkingLine() + "\n\n")
+	} else if m.streaming && m.streamBuf != "" {
 		header := m.msgHeader(styleAssistantLabel.Render("🤖 "+agentName), w)
 		body := styleAssistantBody.Render(wordWrap(m.streamBuf, w)) + "▌"
 		sb.WriteString(header + "\n" + body + "\n\n")
 	}
 	return sb.String()
+}
+
+func (m Model) thinkingLine() string {
+	avail := m.conversationWidth() - 4
+	if avail < 4 {
+		return "🧠"
+	}
+	span := avail - 2 // 🧠 er 2 bred
+	if span < 1 {
+		span = 1
+	}
+	cycle := span * 2
+	pos := m.thinkPos % cycle
+	if pos > span {
+		pos = cycle - pos
+	}
+	return strings.Repeat(" ", pos) + "🧠"
 }
 
 // wordWrap bryder lange linjer ved whitespace uden at ødelægge eksisterende linjeskift.
@@ -296,7 +341,8 @@ func (m Model) statusBar() string {
 
 	var right string
 	if m.streaming {
-		right = styleStatusBar.Render(m.spinner.View() + " arbejder...")
+		elapsed := time.Since(m.streamStart).Round(time.Second)
+		right = styleStatusBar.Render(m.spinner.View() + fmt.Sprintf(" arbejder... %s", elapsed))
 	} else {
 		right = styleStatusBar.Render(styleSystem.Render("/hjælp"))
 	}
@@ -307,6 +353,26 @@ func (m Model) statusBar() string {
 		gap = 0
 	}
 	return left + styleStatusBar.Render(strings.Repeat(" ", gap)) + right
+}
+
+func (m Model) renderConfirmPrompt() string {
+	warnBold := lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
+	descStyle := lipgloss.NewStyle().Bold(true)
+	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	dimStyle := lipgloss.NewStyle().Foreground(colorSubtle)
+
+	line1 := warnBold.Render("⚠  ") + descStyle.Render(m.confirmDesc)
+	sep := dimStyle.Render("  ·  ")
+	line2 := keyStyle.Render("j") + dimStyle.Render(" tillad") +
+		sep + keyStyle.Render("n") + dimStyle.Render(" afvis") +
+		sep + keyStyle.Render("Ctrl+C") + dimStyle.Render(" afbryd")
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorWarn).
+		Width(m.width - 4).
+		Padding(0, 1).
+		Render(line1 + "\n" + line2)
 }
 
 func (m Model) View() string {
@@ -343,12 +409,18 @@ func (m Model) View() string {
 		panels = convView
 	}
 
-	parts := []string{
-		panels,
-		styleActiveBorder.Width(m.width - 2).Render(m.input.View()),
+	var inputArea string
+	if m.pendingConfirm {
+		inputArea = m.renderConfirmPrompt()
+	} else {
+		inputArea = styleActiveBorder.Width(m.width - 2).Render(m.input.View())
 	}
-	if sugg := m.renderSuggestions(); sugg != "" {
-		parts = append(parts, sugg)
+
+	parts := []string{panels, inputArea}
+	if !m.pendingConfirm {
+		if sugg := m.renderSuggestions(); sugg != "" {
+			parts = append(parts, sugg)
+		}
 	}
 	parts = append(parts, m.statusBar())
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)

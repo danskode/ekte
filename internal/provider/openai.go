@@ -102,6 +102,83 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message) (<-chan
 	return ch, nil
 }
 
+func (p *OpenAIProvider) StreamWithTools(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
+	req := openai.ChatCompletionRequest{
+		Model:    p.model,
+		Messages: toOpenAIMessages(messages),
+		Stream:   true,
+	}
+	for _, t := range tools {
+		req.Tools = append(req.Tools, openai.Tool{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.Parameters,
+			},
+		})
+	}
+	stream, err := p.client.CreateChatCompletionStream(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("openai stream: %w", err)
+	}
+	ch := make(chan StreamEvent, 64)
+	go func() {
+		defer close(ch)
+		defer stream.Close()
+		// Akkumulér tool call-fragmenter pr. indeks
+		type accTC struct {
+			id        string
+			name      string
+			arguments string
+		}
+		accumulated := map[int]*accTC{}
+		for {
+			resp, err := stream.Recv()
+			if err != nil {
+				break
+			}
+			if len(resp.Choices) == 0 {
+				continue
+			}
+			delta := resp.Choices[0].Delta
+			if delta.Content != "" {
+				ch <- StreamEvent{Token: delta.Content}
+			}
+			for _, tc := range delta.ToolCalls {
+				idx := 0
+				if tc.Index != nil {
+					idx = *tc.Index
+				}
+				if _, ok := accumulated[idx]; !ok {
+					accumulated[idx] = &accTC{}
+				}
+				acc := accumulated[idx]
+				if tc.ID != "" {
+					acc.id = tc.ID
+				}
+				acc.name += tc.Function.Name
+				acc.arguments += tc.Function.Arguments
+			}
+		}
+		final := StreamEvent{Done: true}
+		for i := 0; i < len(accumulated); i++ {
+			acc := accumulated[i]
+			var raw json.RawMessage
+			if err := json.Unmarshal([]byte(acc.arguments), &raw); err != nil {
+				raw = json.RawMessage(`{}`)
+			}
+			final.ToolCalls = append(final.ToolCalls, ToolCall{
+				ID:    acc.id,
+				Name:  acc.name,
+				Input: raw,
+			})
+		}
+		ch <- final
+	}()
+	return ch, nil
+}
+
 func toOpenAIMessages(msgs []Message) []openai.ChatCompletionMessage {
 	out := make([]openai.ChatCompletionMessage, 0, len(msgs))
 	for _, m := range msgs {

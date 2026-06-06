@@ -38,9 +38,18 @@ type Response struct {
 	Usage      Usage
 }
 
+// StreamEvent er enten et tekst-token eller et afsluttende event med eventuelle tool calls.
+type StreamEvent struct {
+	Token     string     // tekst-fragment; tomt på afsluttende event
+	ToolCalls []ToolCall // kun sat på afsluttende event, hvis LLM kaldte tools
+	Done      bool       // true for det afsluttende event
+}
+
 type Provider interface {
 	Chat(ctx context.Context, messages []Message) (*Response, error)
 	ChatWithTools(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error)
 	Stream(ctx context.Context, messages []Message) (<-chan string, error)
+	// StreamWithTools streamer tekst-tokens løbende og returnerer tool calls på det afsluttende event.
+	StreamWithTools(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error)
 	Name() string
 }

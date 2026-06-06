@@ -232,6 +232,12 @@ func buildContext(question string, index string, pages []Page) string {
 	return sb.String()
 }
 
+// HasSubstantiveQuery returnerer true hvis input indeholder mindst 2
+// ikke-trivielle keywords. Forhindrer wiki-opslag for hilsener og korte fraser.
+func HasSubstantiveQuery(input string) bool {
+	return len(strings.Fields(extractKeywords(input))) >= 2
+}
+
 func extractKeywords(question string) string {
 	stopwords := map[string]bool{
 		"hvad": true, "er": true, "en": true, "et": true, "og": true,

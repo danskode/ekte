@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -13,7 +14,10 @@ import (
 )
 
 // msgStreamStarted returneres når kanalen er klar — TUI begynder at læse fra den.
-type msgStreamStarted struct{ ch <-chan agent.Event }
+type msgStreamStarted struct {
+	ch     <-chan agent.Event
+	cancel context.CancelFunc
+}
 
 // msgStreamEnd markerer at kanalen er lukket og streaming er færdig.
 type msgStreamEnd struct{}
@@ -48,8 +52,9 @@ func initMdCmd(width int) tea.Cmd {
 
 func startStreamCmd(a *agent.Agent, input string) tea.Cmd {
 	return func() tea.Msg {
-		ch := a.ProcessStream(context.Background(), input)
-		return msgStreamStarted{ch: ch}
+		ctx, cancel := context.WithCancel(context.Background())
+		ch := a.ProcessStream(ctx, input)
+		return msgStreamStarted{ch: ch, cancel: cancel}
 	}
 }
 
@@ -93,6 +98,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.conversation.SetContent(m.conversationContent())
 
 	case tea.KeyMsg:
+		// Bekræftelsestilstand: kun j/y bekræfter, n/esc afviser, alt andet ignoreres
+		if m.pendingConfirm {
+			switch strings.ToLower(msg.String()) {
+			case "j", "y":
+				confirmCh := m.confirmCh
+				m.pendingConfirm = false
+				m.confirmCh = nil
+				m.confirmDesc = ""
+				confirmCh <- true
+				m.conversation.SetContent(m.conversationContent())
+				m.conversation.GotoBottom()
+				return m, nil
+			case "n", "esc", "ctrl+c":
+				confirmCh := m.confirmCh
+				m.pendingConfirm = false
+				m.confirmCh = nil
+				m.confirmDesc = ""
+				confirmCh <- false
+				m.conversation.SetContent(m.conversationContent())
+				m.conversation.GotoBottom()
+				return m, nil
+			default:
+				// Scroll-taster og andre taster passerer igennem til viewport
+			}
+		}
 		if msg.String() == "shift+enter" {
 			m.input.InsertString("\n")
 			return m, nil
@@ -112,6 +142,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.Type {
 		case tea.KeyCtrlC:
+			if m.streaming {
+				// Afbryd i stedet for at afslutte
+				if m.cancelStream != nil {
+					m.cancelStream()
+					m.cancelStream = nil
+				}
+				if m.pendingConfirm && m.confirmCh != nil {
+					m.confirmCh <- false
+				}
+				m.streaming = false
+				m.streamBuf = ""
+				m.streamCh = nil
+				m.pendingConfirm = false
+				m.confirmCh = nil
+				m.confirmDesc = ""
+				m.appendSystem(styleError.Render("Afbrudt."))
+				return m, nil
+			}
 			return m, tea.Quit
 
 		case tea.KeyPgUp:
@@ -237,6 +285,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = true
 		m.streamBuf = ""
 		m.streamCh = msg.ch
+		m.cancelStream = msg.cancel
+		m.streamStart = time.Now()
 		return m, tea.Batch(readStreamCmd(msg.ch), m.spinner.Tick)
 
 	case spinner.TickMsg:
@@ -244,6 +294,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			cmds = append(cmds, cmd)
+		}
+		if m.streaming && m.streamBuf == "" {
+			m.thinkPos++
+			m.conversation.SetContent(m.conversationContent())
+			m.conversation.GotoBottom()
 		}
 
 	case msgStreamEnd:
@@ -255,7 +310,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agent.Event:
 		switch msg.Type {
 
+		case agent.EventToolConfirm:
+			m.pendingConfirm = true
+			m.confirmCh = msg.ConfirmCh
+			m.confirmDesc = msg.Content
+			m.conversation.SetContent(m.conversationContent())
+			m.conversation.GotoBottom()
+
+		case agent.EventThinking:
+			m.thinking = true
+			m.thinkPos = 0
+			m.streamBuf = "" // ryd buffer → hjerneanimation vises igen
+			m.conversation.SetContent(m.conversationContent())
+			m.conversation.GotoBottom()
+
 		case agent.EventStreamToken:
+			m.thinking = false
 			m.streamBuf += msg.Content
 			m.conversation.SetContent(m.conversationContent())
 			m.conversation.GotoBottom()
@@ -263,9 +333,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case agent.EventStreamDone:
 			m.streaming = false
+			m.thinking = false
 			m.streamBuf = ""
 			m.streamCh = nil
-			m.messages = append(m.messages, provider.Message{Role: "assistant", Content: msg.Content})
+			if msg.Content != "" {
+				m.messages = append(m.messages, provider.Message{Role: "assistant", Content: msg.Content})
+			}
 			if msg.Source != "" {
 				m.messages = append(m.messages, provider.Message{
 					Role:    "system",
@@ -311,6 +384,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case agent.EventError:
 			m.streaming = false
+			m.thinking = false
 			m.streamBuf = ""
 			m.streamCh = nil
 			m.appendSystem(styleError.Render(msg.Content))
@@ -319,6 +393,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tokenCount = msg.Tokens
 
 		case agent.EventToolOutput:
+			m.streamBuf = ""
 			m.toolOutput = msg.Content
 			m.toolPanel.SetContent(msg.Content)
 

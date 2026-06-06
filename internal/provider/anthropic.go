@@ -159,6 +159,19 @@ func parseAnthropicSSE(r io.Reader, ch chan<- string) {
 	}
 }
 
+// StreamWithTools falder tilbage til ChatWithTools for Anthropic (streaming + tool calls ikke implementeret endnu).
+func (p *AnthropicProvider) StreamWithTools(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
+	resp, err := p.ChatWithTools(ctx, messages, tools)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan StreamEvent, 2)
+	ch <- StreamEvent{Token: resp.Content}
+	ch <- StreamEvent{Done: true, ToolCalls: resp.ToolCalls}
+	close(ch)
+	return ch, nil
+}
+
 // buildRequest bygger request-body. System-beskeder udtrækkes til Anthropics separate system-felt.
 func (p *AnthropicProvider) buildRequest(messages []Message, stream bool, tools []ToolDefinition) ([]byte, error) {
 	system, filtered := separateSystemMessages(messages)
