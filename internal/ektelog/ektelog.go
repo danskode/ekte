@@ -48,7 +48,12 @@ func (l *Logger) write(level Level, msg string, kv []any) {
 		return
 	}
 	ts := time.Now().Format("2006-01-02 15:04:05.000")
-	san := func(s string) string { return strings.ReplaceAll(s, "\n", "\\n") }
+	san := func(s string) string {
+		s = strings.ReplaceAll(s, "\n", "\\n")
+		s = strings.ReplaceAll(s, "\r", "\\r")
+		s = strings.ReplaceAll(s, "\t", "\\t")
+		return s
+	}
 	var sb strings.Builder
 	sb.WriteString(ts)
 	sb.WriteByte(' ')
