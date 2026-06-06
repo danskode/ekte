@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -172,8 +173,16 @@ func (p *OpenAIProvider) StreamWithTools(ctx context.Context, messages []Message
 			return
 		}
 		final := StreamEvent{Done: true}
-		for i := 0; i < len(accumulated); i++ {
-			acc := accumulated[i]
+		keys := make([]int, 0, len(accumulated))
+		for k := range accumulated {
+			keys = append(keys, k)
+		}
+		sort.Ints(keys)
+		for _, k := range keys {
+			acc := accumulated[k]
+			if acc == nil {
+				continue
+			}
 			var raw json.RawMessage
 			if err := json.Unmarshal([]byte(acc.arguments), &raw); err != nil {
 				raw = json.RawMessage(`{}`)

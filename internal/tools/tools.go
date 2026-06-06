@@ -322,7 +322,11 @@ func editFile(args map[string]any, root string) (string, error) {
 		updated = strings.Replace(content, oldStr, newStr, 1)
 	}
 
-	if err := os.WriteFile(abs, []byte(updated), 0644); err != nil {
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("kan ikke læse filinfo %s: %w", path, err)
+	}
+	if err := os.WriteFile(abs, []byte(updated), info.Mode().Perm()); err != nil {
 		return "", fmt.Errorf("kan ikke skrive %s: %w", path, err)
 	}
 	return fmt.Sprintf("✓ Redigeret: %s", path), nil

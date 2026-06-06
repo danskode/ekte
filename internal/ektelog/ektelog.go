@@ -55,7 +55,8 @@ func (l *Logger) write(level Level, msg string, kv []any) {
 	sb.WriteString("  ")
 	sb.WriteString(msg)
 	for i := 0; i+1 < len(kv); i += 2 {
-		sb.WriteString(fmt.Sprintf("  %v=%v", kv[i], kv[i+1]))
+		v := strings.ReplaceAll(fmt.Sprintf("%v", kv[i+1]), "\n", "\\n")
+		sb.WriteString(fmt.Sprintf("  %v=%s", kv[i], v))
 	}
 	sb.WriteByte('\n')
 
