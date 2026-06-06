@@ -43,6 +43,7 @@ type StreamEvent struct {
 	Token     string     // tekst-fragment; tomt på afsluttende event
 	ToolCalls []ToolCall // kun sat på afsluttende event, hvis LLM kaldte tools
 	Done      bool       // true for det afsluttende event
+	Err       error      // sat hvis streamen brød med fejl (Done=true)
 }
 
 type Provider interface {

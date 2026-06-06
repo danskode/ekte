@@ -261,6 +261,11 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 
 	for ev := range eventCh {
 		if ev.Done {
+			if ev.Err != nil {
+				a.log().Error("stream afbrudt", "error", ev.Err)
+				ch <- Event{Type: EventError, Content: "Stream afbrudt: " + ev.Err.Error()}
+				return
+			}
 			finalToolCalls = ev.ToolCalls
 			continue
 		}
@@ -323,7 +328,7 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 		var toolLog strings.Builder
 		for _, tc := range pendingCalls {
 			// Cache: returner tidligere resultat for identiske kald
-			cacheKey := tc.Name + "|" + string(tc.Input)
+			cacheKey := tc.Name + "\x00" + string(tc.Input)
 			if cached, seen := toolCache[cacheKey]; seen {
 				a.log().Warn("tool cache hit (duplikat)", "tool", tc.Name, "args", string(tc.Input))
 				ch <- Event{Type: EventSystem, Content: "↩ " + toolActivityLine(tc, cached) + " (allerede gjort)"}

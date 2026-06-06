@@ -29,7 +29,7 @@ type Logger struct {
 
 // New åbner eller opretter logfilen på den givne sti.
 func New(path string, level Level) (*Logger, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return nil, err
 	}
