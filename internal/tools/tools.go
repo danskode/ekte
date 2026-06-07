@@ -230,23 +230,14 @@ func readFile(args map[string]any, root string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("kan ikke læse %s: %w", path, err)
 	}
-	// Begræns til 64 KB for at undgå enorme LLM-kontekster
+	// Begræns til 64 KB for at undgå enorme LLM-kontekster.
+	// (Tidligere blev output også afkortet til 200 linjer — det skar filer som index.html
+	// midt i markup'en, så modellen aldrig kunne se den del den skulle redigere og endte
+	// i en løkke af identiske gen-læsninger. Byte-grænsen er den relevante kontekst-grænse.)
 	const maxBytes = 64 * 1024
-	truncated := false
+	out := string(data)
 	if len(data) > maxBytes {
-		data = data[:maxBytes]
-		truncated = true
-	}
-	// Begræns output til 200 linjer
-	lines := strings.Split(string(data), "\n")
-	const maxLines = 200
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
-		truncated = true
-	}
-	out := strings.Join(lines, "\n")
-	if truncated {
-		out += fmt.Sprintf("\n\n[... fil afkortet]")
+		out = out[:maxBytes] + "\n\n[... fil afkortet]"
 	}
 	return out, nil
 }
@@ -345,6 +336,15 @@ func writeFile(args map[string]any, root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Genkend allerede-udført arbejde eksplicit i tool-resultatet — modellen har
+	// kun samtalehistorikken at gå efter for at vide hvad den allerede har lavet
+	// (især efter en genoptaget session eller en afbrudt opgave). Uden dette signal
+	// skriver den filer igen fra bunden, selvom indholdet allerede er der.
+	if existing, readErr := os.ReadFile(abs); readErr == nil {
+		if string(existing) == content {
+			return fmt.Sprintf("↩ Filen findes allerede med samme indhold — intet ændret: %s", path), nil
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
 		return "", err
 	}
@@ -416,6 +416,11 @@ func createDir(args map[string]any, root string) (string, error) {
 	abs, err := safePath(root, path)
 	if err != nil {
 		return "", err
+	}
+	// Se kommentar i writeFile — giv modellen et eksplicit "allerede gjort"-signal
+	// i stedet for et identisk "✓ oprettet", som ser ud som nyt arbejde hver gang.
+	if info, statErr := os.Stat(abs); statErr == nil && info.IsDir() {
+		return fmt.Sprintf("↩ Mappe findes allerede: %s", path), nil
 	}
 	if err := os.MkdirAll(abs, 0755); err != nil {
 		return "", fmt.Errorf("kan ikke oprette mappe %s: %w", path, err)
