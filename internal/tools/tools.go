@@ -162,15 +162,21 @@ func Execute(call provider.ToolCall, root string, canRead, canWrite bool) (strin
 	}
 }
 
+// maxSearchFileBytes begrænser hvilke filer searchFiles vil indlæse for indholdssøgning.
+const maxSearchFileBytes = 64 * 1024
+
 // sensitivePatterns er sti-fragmenter der altid afvises for read_file — selv inden for projektmappen.
 // Tjekkes på den opløste, absolutte sti (efter safePath+symlink-resolve) for at undgå omgåelse.
+// Dette er en blokliste — et forsvarslag, ikke en garanti.
 var sensitivePatterns = []string{
 	".ssh", ".aws", ".gnupg", ".netrc", ".git-credentials",
 	"id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_xmss",
+	"authorized_keys", "known_hosts",
 	".npmrc", ".docker", ".pypirc",
-	".bash_history", ".zsh_history", ".sh_history",
-	"credentials", ".config/gh",
+	".bash_history", ".zsh_history", ".sh_history", ".bashrc", ".profile",
+	"credentials", ".config/gh", ".kube", ".azure", ".gcloud",
 	".env", ".pem", ".key", ".p12", ".pfx",
+	"terraform.tfstate",
 	"passwd", "shadow",
 }
 
@@ -193,7 +199,8 @@ func readFile(args map[string]any, root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Følg symlinks til den endelige sti inden det sensitive tjek, så symlink-omgåelse forhindres
+	// Følg symlinks til den endelige sti inden det sensitive tjek, så symlink-omgåelse forhindres.
+	// Læs derefter via samme resolverede sti (ikke abs) for at undgå TOCTOU mellem tjek og læsning.
 	resolved := abs
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		resolved = real
@@ -201,7 +208,7 @@ func readFile(args map[string]any, root string) (string, error) {
 	if isSensitivePath(resolved) {
 		return "", fmt.Errorf("læsning af %s er ikke tilladt", path)
 	}
-	data, err := os.ReadFile(abs)
+	data, err := os.ReadFile(resolved)
 	if err != nil {
 		return "", fmt.Errorf("kan ikke læse %s: %w", path, err)
 	}
@@ -259,6 +266,10 @@ func searchFiles(args map[string]any, root string) (string, error) {
 			return nil
 		}
 		if contains != "" {
+			info, err := d.Info()
+			if err != nil || info.Size() > maxSearchFileBytes {
+				return nil
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return nil
