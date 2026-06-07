@@ -175,9 +175,10 @@ var sensitivePatterns = []string{
 	".npmrc", ".docker", ".pypirc",
 	".bash_history", ".zsh_history", ".sh_history", ".bashrc", ".profile",
 	"credentials", ".config/gh", ".kube", ".azure", ".gcloud",
-	".env", ".pem", ".key", ".p12", ".pfx",
+	".env", ".pem", ".key", ".p12", ".pfx", ".crt", ".cer",
 	"terraform.tfstate",
 	"passwd", "shadow",
+	"secret", "password", "token",
 }
 
 func isSensitivePath(abs string) bool {
@@ -190,23 +191,40 @@ func isSensitivePath(abs string) bool {
 	return false
 }
 
+// resolveSafeFile validerer at en sti er sikker at læse for LLM-formål:
+// (1) den ligger under root (safePath), (2) symlinks følges og resultatet
+// skal STADIG ligge under root (sandkasse-grænsen kan ellers omgås via et internt symlink),
+// (3) den matcher ikke en kendt følsom mønster (blokliste — forsvarslag, ikke garanti).
+// Returnerer den endelige sti der skal læses fra (undgår TOCTOU mellem tjek og læsning).
+// Brug ALTID denne for ethvert værktøj der lader LLM'en læse filindhold — read_file og
+// search_files deler denne kontrol netop for ikke at glemme den ét sted.
+func resolveSafeFile(root, path string) (string, error) {
+	abs, err := safePath(root, path)
+	if err != nil {
+		return "", err
+	}
+	resolved := abs
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		resolved = real
+	}
+	cleanRoot := filepath.Clean(root)
+	if resolved != cleanRoot && !strings.HasPrefix(resolved, cleanRoot+string(os.PathSeparator)) {
+		return "", fmt.Errorf("sti ikke tilladt: %s (symlink peger uden for projektmappen)", path)
+	}
+	if isSensitivePath(resolved) {
+		return "", fmt.Errorf("læsning af %s er ikke tilladt", path)
+	}
+	return resolved, nil
+}
+
 func readFile(args map[string]any, root string) (string, error) {
 	path, _ := args["path"].(string)
 	if path == "" {
 		return "", fmt.Errorf("path mangler")
 	}
-	abs, err := safePath(root, path)
+	resolved, err := resolveSafeFile(root, path)
 	if err != nil {
 		return "", err
-	}
-	// Følg symlinks til den endelige sti inden det sensitive tjek, så symlink-omgåelse forhindres.
-	// Læs derefter via samme resolverede sti (ikke abs) for at undgå TOCTOU mellem tjek og læsning.
-	resolved := abs
-	if real, err := filepath.EvalSymlinks(abs); err == nil {
-		resolved = real
-	}
-	if isSensitivePath(resolved) {
-		return "", fmt.Errorf("læsning af %s er ikke tilladt", path)
 	}
 	data, err := os.ReadFile(resolved)
 	if err != nil {
@@ -266,11 +284,17 @@ func searchFiles(args map[string]any, root string) (string, error) {
 			return nil
 		}
 		if contains != "" {
-			info, err := d.Info()
+			// Samme sikre-læsning-kontrol som read_file — undgår at search_files
+			// bliver en bagdør til at eksfiltrere følsomme filer via 'contains'.
+			resolved, err := resolveSafeFile(root, rel)
+			if err != nil {
+				return nil
+			}
+			info, err := os.Stat(resolved)
 			if err != nil || info.Size() > maxSearchFileBytes {
 				return nil
 			}
-			data, err := os.ReadFile(path)
+			data, err := os.ReadFile(resolved)
 			if err != nil {
 				return nil
 			}
