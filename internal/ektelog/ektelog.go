@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
+
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 type Level int
 
@@ -49,6 +52,7 @@ func (l *Logger) write(level Level, msg string, kv []any) {
 	}
 	ts := time.Now().Format("2006-01-02 15:04:05.000")
 	san := func(s string) string {
+		s = ansiEscape.ReplaceAllString(s, "")
 		s = strings.ReplaceAll(s, "\n", "\\n")
 		s = strings.ReplaceAll(s, "\r", "\\r")
 		s = strings.ReplaceAll(s, "\t", "\\t")
