@@ -16,6 +16,7 @@ import (
 	"github.com/danskode/ekte/internal/obs"
 	"github.com/danskode/ekte/internal/onboarding"
 	"github.com/danskode/ekte/internal/provider"
+	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/tui"
 	"github.com/danskode/ekte/internal/wiki"
@@ -27,7 +28,11 @@ func main() {
 		runInit()
 		return
 	}
-	runTUI()
+	sessionArg := ""
+	if len(os.Args) > 1 {
+		sessionArg = os.Args[1]
+	}
+	runTUI(sessionArg)
 }
 
 func globalEkteDir() string {
@@ -35,7 +40,7 @@ func globalEkteDir() string {
 	return filepath.Join(home, ".ekte")
 }
 
-func runTUI() {
+func runTUI(sessionArg string) {
 	cwd, _ := os.Getwd()
 	globalDir := globalEkteDir()
 
@@ -108,6 +113,13 @@ func runTUI() {
 	}
 	_ = os.MkdirAll(sessionDir, 0755)
 
+	var resumeSession *session.Session
+	if sessionArg != "" {
+		if found, err := session.FindByName(sessionDir, sessionArg); err == nil && found != nil {
+			resumeSession = found
+		}
+	}
+
 	sessionID := time.Now().Format("20060102-150405")
 	obsPath := filepath.Join(sessionDir, sessionID+"_obs.jsonl")
 	recorder := obs.NewRecorder(obsPath, sessionDir)
@@ -132,20 +144,21 @@ func runTUI() {
 	}
 
 	a := agent.New(agent.Config{
-		Provider:     p,
-		Skills:       skills,
-		Wiki:         wikiInst,
-		RepoRoot:     repoRoot,
-		WorkDir:      cwd,
-		SessionDir:   sessionDir,
-		Whitelist:    whitelist,
-		Hooks:        hooks,
-		Obs:          recorder,
-		Log:          logger,
-		AgentName:    profile.AgentName,
-		ContextSize:  contextSize,
-		ProviderName: providerName,
-		ModelName:    modelName,
+		Provider:      p,
+		Skills:        skills,
+		Wiki:          wikiInst,
+		RepoRoot:      repoRoot,
+		WorkDir:       cwd,
+		SessionDir:    sessionDir,
+		Whitelist:     whitelist,
+		Hooks:         hooks,
+		Obs:           recorder,
+		Log:           logger,
+		ResumeSession: resumeSession,
+		AgentName:     profile.AgentName,
+		ContextSize:   contextSize,
+		ProviderName:  providerName,
+		ModelName:     modelName,
 	})
 
 	m := tui.New(a)
@@ -164,17 +177,31 @@ func runTUI() {
 	}
 
 	m.ShowBanner()
-	if logger.Path != "" {
-		m.AddInfo("📋 log: " + logger.Path)
+	if resumeSession != nil {
+		m.AddInfo(fmt.Sprintf("✓ Session genoptaget: %s (%s)", resumeSession.Title, resumeSession.Name))
+	} else if hint := recentSessionsHint(sessionDir); hint != "" {
+		m.AddInfo(hint)
 	}
 	if isFirstRun {
 		m.SetWelcome(welcomeName)
 	}
 
-	prog := tea.NewProgram(m, tea.WithAltScreen())
-	if _, err := prog.Run(); err != nil {
+	// MouseCellMotion gør det muligt at scrolle samtaleruden med musehjulet —
+	// viewport.Model håndterer tea.MouseMsg automatisk når den modtager dem.
+	prog := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	final, err := prog.Run()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "fejl: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Vis afslutnings-noten (sessionsnavn, resume-hint, log-sti) i den rigtige
+	// terminal — alt-screen er nu lukket, så den forsvinder ikke fra skærmen.
+	if fm, ok := final.(tui.Model); ok {
+		if note := fm.ExitNote(); note != "" {
+			fmt.Println()
+			fmt.Println(note)
+		}
 	}
 }
 
@@ -338,6 +365,27 @@ func setConfigProvider(configPath, prov, model, baseURL string) {
 	_ = os.WriteFile(configPath, data, 0600)
 }
 
+// recentSessionsHint viser navnene på de op til 3 seneste gemte sessioner,
+// så brugeren kan se hvordan man genoptager dem med 'ekte <navn>'.
+func recentSessionsHint(sessionDir string) string {
+	sessions, err := session.LoadAll(sessionDir)
+	if err != nil || len(sessions) == 0 {
+		return ""
+	}
+	var names []string
+	for _, s := range sessions {
+		if s.Name == "" {
+			continue
+		}
+		names = append(names, s.Name)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return "💾 Seneste sessioner: " + strings.Join(names, " · ") +
+		"  —  skriv `ekte <navn>` for at fortsætte hvor du slap"
+}
+
 func loadEkteMd(dir string) string {
 	data, err := os.ReadFile(filepath.Join(dir, "ekte.md"))
 	if err != nil {
@@ -360,7 +408,7 @@ func runInit() {
 		Model     string                   `yaml:"model"`
 		BaseURL   string                   `yaml:"base_url,omitempty"`
 		Wiki      *wiki.Config             `yaml:"wiki,omitempty"`
-		Whitelist provider.WhitelistConfig  `yaml:"whitelist"`
+		Whitelist provider.WhitelistConfig `yaml:"whitelist"`
 		Hooks     map[string]string        `yaml:"hooks,omitempty"`
 	}
 

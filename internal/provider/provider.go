@@ -41,6 +41,7 @@ type Response struct {
 // StreamEvent er enten et tekst-token eller et afsluttende event med eventuelle tool calls.
 type StreamEvent struct {
 	Token     string     // tekst-fragment; tomt på afsluttende event
+	Reasoning string     // ræsonnement-fragment fra modellens "tænke"-felt (reasoning_content); separat fra Token
 	ToolCalls []ToolCall // kun sat på afsluttende event, hvis LLM kaldte tools
 	Done      bool       // true for det afsluttende event
 	Err       error      // sat hvis streamen brød med fejl (Done=true)

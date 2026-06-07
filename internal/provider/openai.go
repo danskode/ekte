@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"sort"
 
 	"github.com/sashabaranov/go-openai"
@@ -21,6 +22,23 @@ func NewOpenAIProvider(cfg *Config) *OpenAIProvider {
 	if cfg.BaseURL != "" {
 		clientCfg.BaseURL = cfg.BaseURL
 	}
+	// Lokale LLM-servere (LM Studio m.fl.) lukker ofte holdte-i-live-forbindelser
+	// hurtigere end Go's standardtransport (IdleConnTimeout: 90s) forventer.
+	// Når Go genbruger en sådan "død" forbindelse, fejler det første byte-læs med
+	// "unexpected end of JSON input" — selvom modellen er fuldt indlæst og klar
+	// (et øjeblikkeligt retry virker altid). DisableKeepAlives fjerner hele
+	// problemklassen ved at tvinge en frisk forbindelse pr. kald — uden mærkbar
+	// pris på et lokalt loopback/LAN-link.
+	//
+	// Vi kloner DefaultTransport i stedet for at oprette en helt ny — det bevarer
+	// Proxy-fra-miljø, DialContext-timeout (30s) og TLS-handshake-timeout (10s),
+	// så forbindelsesopsætning stadig er tidsbegrænset. Vi sætter BEVIDST INGEN
+	// http.Client.Timeout: den ville afbryde selve respons-læsningen, og lokale
+	// modeller streamer ofte i flere minutter — en klient-timeout ville kappe
+	// helt normale, lange genereringer midt i strømmen.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DisableKeepAlives = true
+	clientCfg.HTTPClient = &http.Client{Transport: tr}
 	return &OpenAIProvider{
 		client: openai.NewClientWithConfig(clientCfg),
 		model:  cfg.Model,
@@ -155,6 +173,9 @@ func (p *OpenAIProvider) StreamWithTools(ctx context.Context, messages []Message
 			delta := resp.Choices[0].Delta
 			if delta.Content != "" {
 				ch <- StreamEvent{Token: delta.Content}
+			}
+			if delta.ReasoningContent != "" {
+				ch <- StreamEvent{Reasoning: delta.ReasoningContent}
 			}
 			for _, tc := range delta.ToolCalls {
 				idx := 0

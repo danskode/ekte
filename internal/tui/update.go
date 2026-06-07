@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -50,12 +51,42 @@ func initMdCmd(width int) tea.Cmd {
 	}
 }
 
+// submitPrompt sender en prompt til agenten og opdaterer samtalevisningen — fælles
+// for både direkte input og afvikling fra prompt-køen.
+func (m *Model) submitPrompt(val string) tea.Cmd {
+	if val != "/clear" {
+		m.syncFromAgent()
+		m.messages = append(m.messages, provider.Message{Role: "user", Content: val})
+		m.conversation.SetContent(m.conversationContent())
+		m.conversation.GotoBottom()
+	}
+	return startStreamCmd(m.agent, val)
+}
+
+// dequeueNext starter den næste kø-prompt, hvis der er en — kaldes når streaming stopper.
+func (m *Model) dequeueNext() tea.Cmd {
+	if len(m.promptQueue) == 0 {
+		return nil
+	}
+	val := m.promptQueue[0]
+	m.promptQueue = m.promptQueue[1:]
+	return m.submitPrompt(val)
+}
+
 func startStreamCmd(a *agent.Agent, input string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(context.Background())
 		ch := a.ProcessStream(ctx, input)
 		return msgStreamStarted{ch: ch, cancel: cancel}
 	}
+}
+
+// beepCmd sender et terminal-bell (BEL) til stdout — de fleste terminaler
+// bipper eller blinker på dette uden at det påvirker Bubbletea-renderingen,
+// da BEL ikke er en escape-sekvens der flytter cursor eller tegner noget.
+func beepCmd() tea.Msg {
+	fmt.Print("\a")
+	return nil
 }
 
 // readStreamCmd venter på næste event fra kanalen og returnerer det som tea.Msg.
@@ -72,6 +103,7 @@ func readStreamCmd(ch <-chan agent.Event) tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	wasStreaming := m.streaming
 
 	switch msg := msg.(type) {
 
@@ -98,24 +130,65 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.conversation.SetContent(m.conversationContent())
 
 	case tea.KeyMsg:
-		// Bekræftelsestilstand: kun j/y bekræfter, n/esc afviser, alt andet ignoreres
+		// Bekræftelsestilstand: j/y bekræfter, n/esc afviser, Tab afviser + lader
+		// brugeren skrive hvad agenten skal gøre i stedet for blot at vente på et nyt svar
 		if m.pendingConfirm {
+			if m.confirmRedirecting {
+				switch msg.Type {
+				case tea.KeyEnter:
+					val := strings.TrimSpace(m.input.Value())
+					if val == "" {
+						return m, nil
+					}
+					confirmCh := m.confirmCh
+					m.pendingConfirm = false
+					m.confirmRedirecting = false
+					m.confirmCh = nil
+					m.confirmDesc = ""
+					m.input.Reset()
+					confirmCh <- agent.ConfirmResponse{Approved: false, Redirect: val}
+					m.conversation.SetContent(m.conversationContent())
+					m.conversation.GotoBottom()
+					return m, nil
+				case tea.KeyEsc:
+					m.confirmRedirecting = false
+					m.input.Reset()
+					return m, nil
+				}
+				var inputCmd tea.Cmd
+				m.input, inputCmd = m.input.Update(msg)
+				return m, inputCmd
+			}
 			switch strings.ToLower(msg.String()) {
 			case "j", "y":
 				confirmCh := m.confirmCh
 				m.pendingConfirm = false
 				m.confirmCh = nil
 				m.confirmDesc = ""
-				confirmCh <- true
+				confirmCh <- agent.ConfirmResponse{Approved: true}
 				m.conversation.SetContent(m.conversationContent())
 				m.conversation.GotoBottom()
 				return m, nil
-			case "n", "esc", "ctrl+c":
+			case "n", "ctrl+c":
 				confirmCh := m.confirmCh
 				m.pendingConfirm = false
 				m.confirmCh = nil
 				m.confirmDesc = ""
-				confirmCh <- false
+				confirmCh <- agent.ConfirmResponse{Approved: false}
+				m.conversation.SetContent(m.conversationContent())
+				m.conversation.GotoBottom()
+				return m, nil
+			case "tab":
+				m.confirmRedirecting = true
+				m.input.Reset()
+				m.input.Focus()
+				return m, nil
+			case "esc":
+				confirmCh := m.confirmCh
+				m.pendingConfirm = false
+				m.confirmCh = nil
+				m.confirmDesc = ""
+				confirmCh <- agent.ConfirmResponse{Approved: false}
 				m.conversation.SetContent(m.conversationContent())
 				m.conversation.GotoBottom()
 				return m, nil
@@ -149,18 +222,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cancelStream = nil
 				}
 				if m.pendingConfirm && m.confirmCh != nil {
-					m.confirmCh <- false
+					m.confirmCh <- agent.ConfirmResponse{Approved: false}
 				}
 				m.streaming = false
 				m.streamBuf = ""
 				m.streamCh = nil
 				m.pendingConfirm = false
+				m.confirmRedirecting = false
 				m.confirmCh = nil
 				m.confirmDesc = ""
 				m.appendSystem(styleError.Render("Afbrudt."))
 				return m, nil
 			}
-			return m, tea.Quit
+			return m, startStreamCmd(m.agent, "/exit")
 
 		case tea.KeyPgUp:
 			if m.toolOutput != "" {
@@ -263,27 +337,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.conversation.GotoBottom()
 				return m, forrestenCmd(m.agent, val)
 			}
-			if m.streaming {
-				return m, nil // ignorer input under streaming
-			}
 			m.input.Reset()
 			m.historyIdx = -1
 			m.savedDraft = ""
 			if len(m.history) == 0 || m.history[len(m.history)-1] != val {
 				m.history = append(m.history, val)
 			}
-			if val != "/clear" {
-				m.syncFromAgent()
-				m.messages = append(m.messages, provider.Message{Role: "user", Content: val})
-				m.conversation.SetContent(m.conversationContent())
-				m.conversation.GotoBottom()
+			if m.streaming {
+				// Læg i kø i stedet for at blokere — afvikles automatisk når den aktuelle prompt er færdig
+				m.promptQueue = append(m.promptQueue, val)
+				return m, nil
 			}
-			return m, startStreamCmd(m.agent, val)
+			return m, m.submitPrompt(val)
 		}
 
 	case msgStreamStarted:
 		m.streaming = true
 		m.streamBuf = ""
+		m.reasoningBuf = ""
 		m.streamCh = msg.ch
 		m.cancelStream = msg.cancel
 		m.streamStart = time.Now()
@@ -316,13 +387,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.confirmDesc = msg.Content
 			m.conversation.SetContent(m.conversationContent())
 			m.conversation.GotoBottom()
+			if m.agent != nil && m.agent.SoundEnabled() {
+				cmds = append(cmds, beepCmd)
+			}
 
 		case agent.EventThinking:
 			m.thinking = true
 			m.thinkPos = 0
 			m.streamBuf = "" // ryd buffer → hjerneanimation vises igen
+			m.reasoningBuf = ""
 			m.conversation.SetContent(m.conversationContent())
 			m.conversation.GotoBottom()
+
+		case agent.EventReasoningToken:
+			// Stream modellens "tanker" live ind i sidepanelet — det erstattes
+			// automatisk af tool-output, hvis/når modellen begynder at kalde tools.
+			m.reasoningBuf += msg.Content
+			m.toolOutput = "🧠 " + m.reasoningBuf
+			m.toolPanel.SetContent(m.toolOutput)
+			m.toolPanel.GotoBottom()
+			return m, readStreamCmd(m.streamCh)
 
 		case agent.EventStreamToken:
 			m.thinking = false
@@ -345,11 +429,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Content: "Information fra 📚 wiki · " + msg.Source,
 				})
 			}
+			if msg.Stats != "" {
+				m.messages = append(m.messages, provider.Message{
+					Role:    "system",
+					Content: msg.Stats,
+				})
+			}
 			m.conversation.SetContent(m.conversationContent())
 			m.conversation.GotoBottom()
+			if m.agent != nil && m.agent.SoundEnabled() {
+				cmds = append(cmds, beepCmd)
+			}
 
 		case agent.EventAssistant:
-			m.messages = append(m.messages, provider.Message{Role: "assistant", Content: msg.Content})
+			// Nulstil streaming-bufferen FØR vi tilføjer den færdige besked til m.messages —
+			// ellers vises samme tekst dobbelt et øjeblik (én gang som fastlåst besked, én
+			// gang som det "levende" streamBuf), indtil næste EventThinking rydder den.
+			m.streamBuf = ""
+			if msg.Content != "" {
+				m.messages = append(m.messages, provider.Message{Role: "assistant", Content: msg.Content})
+			}
 			if msg.Source != "" {
 				m.messages = append(m.messages, provider.Message{
 					Role:    "system",
@@ -379,6 +478,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.messages = nil
 				m.conversation.SetContent(m.conversationContent())
 			} else {
+				m.exitNote = msg.Content
 				m.appendSystem(msg.Content)
 			}
 
@@ -402,10 +502,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Hvis vi stadig streamer og næste event ikke er token (fx EventSystem fra slash),
-		// fortsæt med at læse kanalen
+		// fortsæt med at læse kanalen — men bevar evt. opsamlede cmds (fx beepCmd),
+		// ellers går de tabt når vi returnerer tidligt her.
 		if m.streaming && m.streamCh != nil &&
 			msg.Type != agent.EventStreamToken {
-			return m, readStreamCmd(m.streamCh)
+			cmds = append(cmds, readStreamCmd(m.streamCh))
+			return m, tea.Batch(cmds...)
 		}
 
 		m.syncFromAgent()
@@ -424,6 +526,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var toolCmd tea.Cmd
 		m.toolPanel, toolCmd = m.toolPanel.Update(msg)
 		cmds = append(cmds, toolCmd)
+	}
+
+	if wasStreaming && !m.streaming {
+		if cmd := m.dequeueNext(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	return m, tea.Batch(cmds...)

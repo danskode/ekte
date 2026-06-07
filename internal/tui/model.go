@@ -38,6 +38,7 @@ type Model struct {
 	historyIdx        int
 	savedDraft        string
 	pendingShiftEnter bool
+	promptQueue       []string
 
 	bannerContent    string
 	forrestenPending bool
@@ -55,16 +56,29 @@ type Model struct {
 	cancelStream context.CancelFunc
 	thinking     bool
 	thinkPos     int
+	reasoningBuf string // modellens live-streamede "tanker" — vises i sidepanelet, indtil tool-output overtager det
 
-	pendingConfirm bool
-	confirmCh      chan bool
-	confirmDesc    string
+	pendingConfirm     bool
+	confirmCh          chan agent.ConfirmResponse
+	confirmDesc        string
+	confirmRedirecting bool // bruger er i gang med at skrive en omdirigering ved afvisning
 
 	tokenCount int
 	maxTokens  int
 	spinner    spinner.Model
 	agent      *agent.Agent
 	ready      bool
+
+	// exitNote er den seneste system-besked der blev modtaget — ved /exit eller
+	// Ctrl+C er det netop afslutnings-resuméet (sessionsnavn, resume-hint, log-sti).
+	// Printes til den rigtige terminal efter alt-screen lukker, så brugeren kan se det.
+	exitNote string
+}
+
+// ExitNote returnerer den seneste system-besked modtaget før programmet afsluttede —
+// til brug uden for alt-screen, så afslutningsbeskeden ikke forsvinder med skærmen.
+func (m Model) ExitNote() string {
+	return m.exitNote
 }
 
 func New(a *agent.Agent) Model {
@@ -344,7 +358,11 @@ func (m Model) statusBar() string {
 		elapsed := time.Since(m.streamStart).Round(time.Second)
 		right = styleStatusBar.Render(m.spinner.View() + fmt.Sprintf(" arbejder... %s", elapsed))
 	} else {
-		right = styleStatusBar.Render(styleSystem.Render("/hjælp"))
+		soundIcon := "🔇"
+		if m.agent != nil && m.agent.SoundEnabled() {
+			soundIcon = "🔊"
+		}
+		right = styleStatusBar.Render(styleSystem.Render("PgUp/PgDn: scrol " + soundIcon + " · /hjælp"))
 	}
 
 	left := styleStatusBar.Render(ctxStyled + skillIndicator)
@@ -361,10 +379,24 @@ func (m Model) renderConfirmPrompt() string {
 	keyStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	dimStyle := lipgloss.NewStyle().Foreground(colorSubtle)
 
+	if m.confirmRedirecting {
+		line1 := warnBold.Render("⚠  ") + descStyle.Render(m.confirmDesc)
+		hint := dimStyle.Render("Hvad skal agenten gøre i stedet? ") +
+			keyStyle.Render("Enter") + dimStyle.Render(" sender · ") +
+			keyStyle.Render("Esc") + dimStyle.Render(" annullerer")
+		return lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorWarn).
+			Width(m.width - 4).
+			Padding(0, 1).
+			Render(line1 + "\n" + hint + "\n" + m.input.View())
+	}
+
 	line1 := warnBold.Render("⚠  ") + descStyle.Render(m.confirmDesc)
 	sep := dimStyle.Render("  ·  ")
 	line2 := keyStyle.Render("j") + dimStyle.Render(" tillad") +
 		sep + keyStyle.Render("n") + dimStyle.Render(" afvis") +
+		sep + keyStyle.Render("Tab") + dimStyle.Render(" afvis + giv ny besked") +
 		sep + keyStyle.Render("Ctrl+C") + dimStyle.Render(" afbryd")
 
 	return lipgloss.NewStyle().
@@ -421,6 +453,9 @@ func (m Model) View() string {
 		if sugg := m.renderSuggestions(); sugg != "" {
 			parts = append(parts, sugg)
 		}
+		if q := m.renderQueue(); q != "" {
+			parts = append(parts, q)
+		}
 	}
 	parts = append(parts, m.statusBar())
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
@@ -470,6 +505,25 @@ func (m Model) renderSuggestions() string {
 	}
 	sb.WriteString("  " + hintStyle.Render("tab · ↑↓"))
 	return sb.String()
+}
+
+func (m Model) renderQueue() string {
+	if len(m.promptQueue) == 0 {
+		return ""
+	}
+	dimStyle := lipgloss.NewStyle().Foreground(colorSubtle)
+	hintStyle := lipgloss.NewStyle().Foreground(colorBorder)
+
+	var items []string
+	for i, q := range m.promptQueue {
+		preview := strings.ReplaceAll(q, "\n", " ")
+		if len(preview) > 40 {
+			preview = preview[:40] + "…"
+		}
+		items = append(items, fmt.Sprintf("%d. %s", i+1, preview))
+	}
+	return "  " + dimStyle.Render("⏳ i kø: "+strings.Join(items, "  ·  ")) +
+		"  " + hintStyle.Render("(afvikles automatisk)")
 }
 
 func (m *Model) appendSystem(content string) {
