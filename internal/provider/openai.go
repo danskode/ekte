@@ -138,6 +138,10 @@ func (p *OpenAIProvider) StreamWithTools(ctx context.Context, messages []Message
 		accumulated := map[int]*accTC{}
 		var streamErr error
 		for {
+			if ctx.Err() != nil {
+				streamErr = ctx.Err()
+				break
+			}
 			resp, err := stream.Recv()
 			if err != nil {
 				if !errors.Is(err, io.EOF) {

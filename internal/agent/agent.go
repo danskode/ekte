@@ -344,7 +344,7 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 			// Cache: returner tidligere resultat for identiske kald
 			cacheKey := tc.Name + "\x00" + string(tc.Input)
 			if cached, seen := toolCache[cacheKey]; seen {
-				a.log().Warn("tool cache hit (duplikat)", "tool", tc.Name, "args", string(tc.Input))
+				a.log().Warn("tool cache hit (duplikat)", "tool", tc.Name, "path", logSafePath(tc.Input))
 				ch <- Event{Type: EventSystem, Content: "↩ " + toolActivityLine(tc, cached) + " (allerede gjort)"}
 				msgs = append(msgs, provider.Message{Role: "tool", Content: cached, ToolCallID: tc.ID})
 				continue
@@ -352,7 +352,7 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 
 			// Skriveoperationer kræver brugerbekræftelse
 			if tc.Name == "write_file" || tc.Name == "edit_file" || tc.Name == "create_dir" {
-				a.log().Info("tool confirm", "tool", tc.Name, "args", string(tc.Input))
+				a.log().Info("tool confirm", "tool", tc.Name, "path", logSafePath(tc.Input))
 				desc := toolConfirmDesc(tc)
 				confirmCh := make(chan bool, 1)
 				ch <- Event{Type: EventToolConfirm, Content: desc, ConfirmCh: confirmCh}
@@ -375,6 +375,9 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 			t0 := time.Now()
 			a.log().Debug("tool exec", "tool", tc.Name, "path", logSafePath(tc.Input))
 			result, err := tools.Execute(tc, workdir, a.cfg.Whitelist.FileRead, a.cfg.Whitelist.FileWrite)
+			if err == nil {
+				result = stripANSI(result)
+			}
 			if err != nil {
 				a.log().Error("tool fejl", "tool", tc.Name, "error", err, "duration_ms", time.Since(t0).Milliseconds())
 				result = "Fejl: " + err.Error()
@@ -487,22 +490,30 @@ func logSafePath(input json.RawMessage) string {
 	return "[ingen sti]"
 }
 
-// injectionPatterns er mønstre der indikerer prompt injection i filindhold.
-var injectionPrefixes = []string{
-	"ignore ", "system:", "<|im_start|>", "<|im_end|>", "<|system|>",
-	"[system]", "assistant:", "user:", "you are ", "your new ",
-}
+// injectionPattern matcher kendte formuleringer for prompt injection — hvor som helst i linjen,
+// ikke kun som præfiks, da angreb ofte gemmes midt i tekst ("Normal tekst. Ignore previous...").
+// Dette er et ekstra forsvarslag (defense-in-depth) — IKKE en garanti. Den primære spærring er
+// at filindhold altid sendes som en separat tool-rolle adskilt fra brugerens instruktioner,
+// og at write/edit/create_dir altid kræver eksplicit brugerbekræftelse uanset hvad LLM'en foreslår.
+var injectionPattern = regexp.MustCompile(`(?i)(` +
+	`ignore\s+(all\s+|the\s+)?(previous|prior|above)|` +
+	`disregard\s+(all\s+|the\s+)?(previous|prior|above)|` +
+	`forget\s+(all\s+|your\s+|the\s+)?(previous|prior|instructions)|` +
+	`new\s+instructions?\s*[:.]|` +
+	`system\s*[:]|<\|?(im_start|im_end|system|assistant|user)\|?>|` +
+	`\[(system|inst)\]|<(human|assistant|system)>|` +
+	`you\s+(are\s+now|must\s+now)|act\s+as\s+(a|an)|` +
+	`reveal\s+(your|the)\s+(prompt|instructions|system)|` +
+	`print\s+your\s+(prompt|instructions|system)` +
+	`)`)
 
 // sanitizeFileContent fjerner linjer der ligner prompt injection-forsøg.
+// Svagt ekstra lag — den reelle beskyttelse er bekræftelsesdialogen på skriveoperationer.
 func sanitizeFileContent(content string) string {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
-		lower := strings.ToLower(strings.TrimSpace(line))
-		for _, prefix := range injectionPrefixes {
-			if strings.HasPrefix(lower, prefix) {
-				lines[i] = "[linje fjernet: mulig prompt injection]"
-				break
-			}
+		if injectionPattern.MatchString(line) {
+			lines[i] = "[linje fjernet: mulig prompt injection]"
 		}
 	}
 	return strings.Join(lines, "\n")

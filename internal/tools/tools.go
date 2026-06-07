@@ -162,13 +162,26 @@ func Execute(call provider.ToolCall, root string, canRead, canWrite bool) (strin
 	}
 }
 
-// sensitivePatterns er stier der altid afvises for read_file — selv inden for projektmappen.
+// sensitivePatterns er sti-fragmenter der altid afvises for read_file — selv inden for projektmappen.
+// Tjekkes på den opløste, absolutte sti (efter safePath+symlink-resolve) for at undgå omgåelse.
 var sensitivePatterns = []string{
 	".ssh", ".aws", ".gnupg", ".netrc", ".git-credentials",
 	"id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_xmss",
 	".npmrc", ".docker", ".pypirc",
 	".bash_history", ".zsh_history", ".sh_history",
 	"credentials", ".config/gh",
+	".env", ".pem", ".key", ".p12", ".pfx",
+	"passwd", "shadow",
+}
+
+func isSensitivePath(abs string) bool {
+	lower := strings.ToLower(abs)
+	for _, pat := range sensitivePatterns {
+		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
+	return false
 }
 
 func readFile(args map[string]any, root string) (string, error) {
@@ -176,15 +189,17 @@ func readFile(args map[string]any, root string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path mangler")
 	}
-	lower := strings.ToLower(path)
-	for _, pat := range sensitivePatterns {
-		if strings.Contains(lower, pat) {
-			return "", fmt.Errorf("læsning af %s er ikke tilladt", path)
-		}
-	}
 	abs, err := safePath(root, path)
 	if err != nil {
 		return "", err
+	}
+	// Følg symlinks til den endelige sti inden det sensitive tjek, så symlink-omgåelse forhindres
+	resolved := abs
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		resolved = real
+	}
+	if isSensitivePath(resolved) {
+		return "", fmt.Errorf("læsning af %s er ikke tilladt", path)
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
