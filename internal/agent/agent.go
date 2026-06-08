@@ -340,6 +340,34 @@ streamAttempts:
 				if ev.Err != nil {
 					if tokenCount == 0 && attempt < maxEarlyStreamRetries && ctx.Err() == nil {
 						a.log().Warn("stream fejlede før første token — prøver igen", "forsøg", attempt+1, "error", ev.Err)
+						// Producenten lukker kanalen lige efter Done i normale tilfælde,
+						// men vi dræner den defensivt i baggrunden, så et evt. uventet
+						// efterfølgende send fra provideren aldrig kan blokere en
+						// goroutine på en kanal, ingen længere læser fra (CWE-400).
+						// Drænet har SELV udgangsbetingelser — kanal-lukning, kontekst-
+						// annullering og en absolut timeout — så det aldrig kan blokere
+						// uendeligt, selv hvis provideren mod forventning aldrig lukker
+						// kanalen (hvilket ellers blot ville flytte lækagen hertil).
+						// ctx sendes eksplicit som parameter (i stedet for closure-capture)
+						// så værdien fryses ved opstart, uafhængigt af om loop-variablen
+						// 'ctx' nogensinde skulle blive gen-tildelt i fremtidige ændringer.
+						go func(c <-chan provider.StreamEvent, drainCtx context.Context) {
+							const drainTimeout = 30 * time.Second
+							timer := time.NewTimer(drainTimeout)
+							defer timer.Stop()
+							for {
+								select {
+								case _, ok := <-c:
+									if !ok {
+										return
+									}
+								case <-drainCtx.Done():
+									return
+								case <-timer.C:
+									return
+								}
+							}
+						}(eventCh, ctx)
 						select {
 						case <-time.After(earlyStreamRetryDelay):
 						case <-ctx.Done():
