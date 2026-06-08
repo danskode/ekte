@@ -1337,7 +1337,49 @@ func trimHistory(msgs []provider.Message, maxNonSystem int) []provider.Message {
 		sys = sys[:maxSys]
 	}
 	if len(conv) > maxNonSystem {
-		conv = conv[len(conv)-maxNonSystem:]
+		cut := len(conv) - maxNonSystem
+
+		// Visse modellers chat-skabeloner (Jinja — fx Qwen via llama.cpp/
+		// LM Studio) kræver mindst én 'user'-besked for at rendere prompten
+		// og fejler ellers med "Error rendering prompt with jinja template:
+		// no user query found". Lange værktøjs-ture (uden det tidligere
+		// rundeloft) kan sagtens generere langt over 20 sammenhængende
+		// assistant-/tool-beskeder uden en ny user-besked imellem — en naiv
+		// hale-afskæring kunne derfor producere et vindue helt uden user-rolle.
+		hasUser := false
+		for i := cut; i < len(conv); i++ {
+			if conv[i].Role == "user" {
+				hasUser = true
+				break
+			}
+		}
+		if !hasUser {
+			lastUser := -1
+			for i := cut - 1; i >= 0; i-- {
+				if conv[i].Role == "user" {
+					lastUser = i
+					break
+				}
+			}
+			// hardCap er en grænse der ALDRIG kan tilsidesættes — heller ikke
+			// for at finde en user-besked. Uden den kunne en lang værktøjs-tur
+			// reelt deaktivere trimningen og lade historikken vokse ubegrænset
+			// (CWE-400/CWE-770). Ligger sidste user-besked længere tilbage end
+			// dette, skærer vi normalt og indsætter i stedet en minimal
+			// placeholder-user-besked, så skabelonen stadig kan rendere.
+			hardCap := maxNonSystem * 3
+			if lastUser >= 0 && len(conv)-lastUser <= hardCap {
+				cut = lastUser
+			} else {
+				placeholder := provider.Message{
+					Role:    "user",
+					Content: "(tidligere besked udeladt for at holde kontekst-vinduet kort)",
+				}
+				conv = append([]provider.Message{placeholder}, conv[cut:]...)
+				return append(sys, conv...)
+			}
+		}
+		conv = conv[cut:]
 	}
 	return append(sys, conv...)
 }
