@@ -306,57 +306,82 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 		ctxLog = append(ctxLog, "ctx_size", a.cfg.ContextSize, "ctx_pct", fmt.Sprintf("%.0f%%", float64(tokEst)/float64(a.cfg.ContextSize)*100))
 	}
 	a.log().Info("stream start", ctxLog...)
-	streamStart := time.Now()
-
-	eventCh, err := a.cfg.Provider.StreamWithTools(ctx, msgs, toolDefs)
-	if err != nil {
-		a.log().Error("stream fejl", "error", err)
-		ch <- Event{Type: EventError, Content: "LLM-fejl: " + err.Error()}
-		return
-	}
 
 	var sb strings.Builder
 	var finalToolCalls []provider.ToolCall
 	tokenCount := 0
 	var firstTokenAt time.Time
 	splitter := &thinkSplitter{}
+	var streamStart time.Time
 
-	for ev := range eventCh {
-		if ev.Done {
-			if ev.Err != nil {
-				a.log().Error("stream afbrudt", "error", ev.Err)
-				ch <- Event{Type: EventError, Content: "Stream afbrudt: " + ev.Err.Error()}
-				return
+	// Lokale LLM-servere (LM Studio m.fl.) returnerer nogle gange en hurtig
+	// fejl-JSON-krop i stedet for en SSE-strøm, hvis modellen ikke er færdig-
+	// indlæst endnu — det får streaming-parseren til at fejle med "unexpected
+	// end of JSON input" i løbet af få millisekunder, FØR noget som helst er
+	// modtaget. Brugeren har selv observeret at et øjeblikkeligt retry altid
+	// løser det. Vi gør det derfor automatisk (stille, et par gange) når
+	// fejlen rammer før første token — men viser fejlen med det samme hvis
+	// strømmen allerede er i gang, da det dér er en reel afbrydelse.
+	const maxEarlyStreamRetries = 2
+	const earlyStreamRetryDelay = 700 * time.Millisecond
+
+streamAttempts:
+	for attempt := 0; ; attempt++ {
+		streamStart = time.Now()
+		eventCh, err := a.cfg.Provider.StreamWithTools(ctx, msgs, toolDefs)
+		if err != nil {
+			a.log().Error("stream fejl", "error", err)
+			ch <- Event{Type: EventError, Content: "LLM-fejl: " + err.Error()}
+			return
+		}
+
+		for ev := range eventCh {
+			if ev.Done {
+				if ev.Err != nil {
+					if tokenCount == 0 && attempt < maxEarlyStreamRetries && ctx.Err() == nil {
+						a.log().Warn("stream fejlede før første token — prøver igen", "forsøg", attempt+1, "error", ev.Err)
+						select {
+						case <-time.After(earlyStreamRetryDelay):
+						case <-ctx.Done():
+							return
+						}
+						continue streamAttempts
+					}
+					a.log().Error("stream afbrudt", "error", ev.Err)
+					ch <- Event{Type: EventError, Content: "Stream afbrudt: " + ev.Err.Error()}
+					return
+				}
+				finalToolCalls = ev.ToolCalls
+				continue
 			}
-			finalToolCalls = ev.ToolCalls
-			continue
-		}
-		if ev.Token == "" && ev.Reasoning == "" {
-			continue
-		}
-		if firstTokenAt.IsZero() {
-			firstTokenAt = time.Now()
-		}
-		tokenCount++
-		// Nogle modeller (fx deepseek-reasoner) sender ræsonnement i et separat
-		// reasoning_content-felt frem for inline <think>-tags.
-		if ev.Reasoning != "" {
-			ch <- Event{Type: EventReasoningToken, Content: ev.Reasoning}
-		}
-		if ev.Token != "" {
-			sb.WriteString(ev.Token)
-			// Andre modeller (fx Qwen via LM Studio) sender ræsonnement som inline
-			// <think>...</think>-tags i selve content-strømmen. Splitteren skiller
-			// dem ad live, så tankerne kan vises i sidepanelet i stedet for at
-			// optræde som rå tags i selve samtalen.
-			answer, reasoning := splitter.feed(ev.Token)
-			if reasoning != "" {
-				ch <- Event{Type: EventReasoningToken, Content: reasoning}
+			if ev.Token == "" && ev.Reasoning == "" {
+				continue
 			}
-			if answer != "" {
-				ch <- Event{Type: EventStreamToken, Content: answer}
+			if firstTokenAt.IsZero() {
+				firstTokenAt = time.Now()
+			}
+			tokenCount++
+			// Nogle modeller (fx deepseek-reasoner) sender ræsonnement i et separat
+			// reasoning_content-felt frem for inline <think>-tags.
+			if ev.Reasoning != "" {
+				ch <- Event{Type: EventReasoningToken, Content: ev.Reasoning}
+			}
+			if ev.Token != "" {
+				sb.WriteString(ev.Token)
+				// Andre modeller (fx Qwen via LM Studio) sender ræsonnement som inline
+				// <think>...</think>-tags i selve content-strømmen. Splitteren skiller
+				// dem ad live, så tankerne kan vises i sidepanelet i stedet for at
+				// optræde som rå tags i selve samtalen.
+				answer, reasoning := splitter.feed(ev.Token)
+				if reasoning != "" {
+					ch <- Event{Type: EventReasoningToken, Content: reasoning}
+				}
+				if answer != "" {
+					ch <- Event{Type: EventStreamToken, Content: answer}
+				}
 			}
 		}
+		break streamAttempts
 	}
 
 	// rawFull bevares med think-tags til msgs — modellen skal se sin egen ræsonnering
