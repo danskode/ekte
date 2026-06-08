@@ -2,6 +2,8 @@ package provider
 
 import (
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestMergeConfigsBothNil(t *testing.T) {
@@ -113,9 +115,9 @@ func TestMergeConfigsWhitelistFromLocal(t *testing.T) {
 func TestMergeConfigsHooksFromLocal(t *testing.T) {
 	global := &Config{Provider: "anthropic"}
 	local := &Config{
-		Hooks: map[string]string{
-			"test": "go test ./...",
-			"lint": "golangci-lint run",
+		Hooks: map[string]HookConfig{
+			"test": {Cmd: "go test ./..."},
+			"lint": {Cmd: "golangci-lint run"},
 		},
 	}
 	cfg := MergeConfigs(global, local)
@@ -123,8 +125,76 @@ func TestMergeConfigsHooksFromLocal(t *testing.T) {
 	if len(cfg.Hooks) != 2 {
 		t.Errorf("Hooks: forventede 2, fik %d", len(cfg.Hooks))
 	}
-	if cfg.Hooks["test"] != "go test ./..." {
-		t.Errorf("Hooks[test]: forkert værdi %q", cfg.Hooks["test"])
+	if cfg.Hooks["test"].Cmd != "go test ./..." {
+		t.Errorf("Hooks[test].Cmd: forkert værdi %q", cfg.Hooks["test"].Cmd)
+	}
+}
+
+func TestHookConfigYAML_strengForm(t *testing.T) {
+	input := `
+hooks:
+  test: go test ./...
+  lint: golangci-lint run
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal fejlede: %v", err)
+	}
+	if cfg.Hooks["test"].Cmd != "go test ./..." {
+		t.Errorf("streng-form: Cmd=%q, forventet 'go test ./...'", cfg.Hooks["test"].Cmd)
+	}
+	if cfg.Hooks["test"].Container != nil {
+		t.Error("streng-form: Container burde være nil")
+	}
+}
+
+func TestHookConfigYAML_objektForm(t *testing.T) {
+	input := `
+hooks:
+  compile:
+    cmd: mvn -o -B compile
+    container:
+      image: maven:3.9-eclipse-temurin-21
+      network: false
+      memory: 1g
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal fejlede: %v", err)
+	}
+	hc := cfg.Hooks["compile"]
+	if hc.Cmd != "mvn -o -B compile" {
+		t.Errorf("Cmd=%q", hc.Cmd)
+	}
+	if hc.Container == nil {
+		t.Fatal("Container burde ikke være nil")
+	}
+	if hc.Container.Image != "maven:3.9-eclipse-temurin-21" {
+		t.Errorf("Image=%q", hc.Container.Image)
+	}
+	if hc.Container.Memory != "1g" {
+		t.Errorf("Memory=%q", hc.Container.Memory)
+	}
+}
+
+func TestHookConfigYAML_blandedeForme(t *testing.T) {
+	input := `
+hooks:
+  test: go test ./...
+  compile:
+    cmd: mvn compile
+    container:
+      image: maven:3.9
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal fejlede: %v", err)
+	}
+	if cfg.Hooks["test"].Cmd != "go test ./..." {
+		t.Errorf("test-hook: Cmd=%q", cfg.Hooks["test"].Cmd)
+	}
+	if cfg.Hooks["compile"].Container == nil {
+		t.Error("compile-hook: Container burde ikke være nil")
 	}
 }
 

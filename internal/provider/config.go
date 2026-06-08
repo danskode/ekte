@@ -15,23 +15,69 @@ type WikiConfig struct {
 // WhitelistConfig styrer hvilke operationer agenten må udføre uden bekræftelse.
 // Alt er forbudt som standard — tilføj eksplicit til .ekte/config.yaml.
 type WhitelistConfig struct {
-	GitWorktree bool `yaml:"git_worktree"` // /spec opret/merge/fjern
-	WikiWrite   bool `yaml:"wiki_write"`   // /wiki gem
-	WikiFetch   bool `yaml:"wiki_fetch"`   // /wiki-get hent URL-indhold
-	HookRun     bool `yaml:"hook_run"`     // /hook <navn>
-	FileRead    bool `yaml:"file_read"`    // LLM må læse filer
-	FileWrite   bool `yaml:"file_write"`   // LLM må skrive/oprette filer
+	GitWorktree   bool `yaml:"git_worktree"`   // /spec opret/merge/fjern
+	WikiWrite     bool `yaml:"wiki_write"`     // /wiki gem
+	WikiFetch     bool `yaml:"wiki_fetch"`     // /wiki-get hent URL-indhold
+	HookRun       bool `yaml:"hook_run"`       // /hook <navn>
+	HookContainer bool `yaml:"hook_container"` // /hook med container-isolation (kræver desuden hook_run)
+	FileRead      bool `yaml:"file_read"`      // LLM må læse filer
+	FileWrite     bool `yaml:"file_write"`     // LLM må skrive/oprette filer
+}
+
+// ContainerSpec beskriver hvordan en hook køres i en isoleret container.
+type ContainerSpec struct {
+	Image   string   `yaml:"image"`
+	Network bool     `yaml:"network,omitempty"`  // default false = --network none
+	Memory  string   `yaml:"memory,omitempty"`   // default "512m"
+	CPUs    string   `yaml:"cpus,omitempty"`     // default "1"
+	Workdir string   `yaml:"workdir,omitempty"`  // default "/work"
+	Ports   []string `yaml:"ports,omitempty"`    // ["8080:8080"]
+	Env     []string `yaml:"env,omitempty"`      // eksplicitte KEY=VALUE — arves ikke fra host
+}
+
+// HookConfig beskriver én hook — enten en simpel shell-kommando eller en
+// kommando der køres i en isoleret container.
+// Bagudkompatibel: en streng-værdi i YAML ("test: go test ./...") parses
+// automatisk til HookConfig{Cmd: "go test ./..."}.
+type HookConfig struct {
+	Cmd       string         `yaml:"cmd"`
+	Container *ContainerSpec `yaml:"container,omitempty"`
+}
+
+func (h *HookConfig) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		h.Cmd = value.Value
+		return nil
+	}
+	type raw HookConfig
+	return value.Decode((*raw)(h))
+}
+
+// ContainerConfig indeholder globale defaults og runtime-valg for container-hooks.
+type ContainerConfig struct {
+	Runtime        string `yaml:"runtime"`         // "docker"|"podman"|"" = autodetect
+	DefaultMemory  string `yaml:"default_memory"`  // default "512m"
+	DefaultCPUs    string `yaml:"default_cpus"`    // default "1"
+	TimeoutSeconds int    `yaml:"timeout_seconds"` // default 300; 0 = ingen timeout
+}
+
+// GoalConfig styrer adfærden for /goal-kommandoen.
+type GoalConfig struct {
+	CheckHook     string `yaml:"check_hook"`     // navn på hook der bruges som succes-tjek
+	MaxIterations int    `yaml:"max_iterations"` // default 10
 }
 
 type Config struct {
-	Provider    string            `yaml:"provider"`
-	Model       string            `yaml:"model"`
-	BaseURL     string            `yaml:"base_url"`
-	APIKey      string            `yaml:"api_key"` // læses kun fra env — advarsel hvis sat i fil
-	ContextSize int               `yaml:"context_size"` // 0 = brug default (200000)
-	Wiki        WikiConfig        `yaml:"wiki"`
-	Whitelist   WhitelistConfig   `yaml:"whitelist"`
-	Hooks       map[string]string `yaml:"hooks,omitempty"` // navn → shell-kommando
+	Provider    string                `yaml:"provider"`
+	Model       string                `yaml:"model"`
+	BaseURL     string                `yaml:"base_url"`
+	APIKey      string                `yaml:"api_key"` // læses kun fra env — advarsel hvis sat i fil
+	ContextSize int                   `yaml:"context_size"` // 0 = brug default (200000)
+	Wiki        WikiConfig            `yaml:"wiki"`
+	Whitelist   WhitelistConfig       `yaml:"whitelist"`
+	Hooks       map[string]HookConfig `yaml:"hooks,omitempty"`
+	Containers  ContainerConfig       `yaml:"containers,omitempty"`
+	Goal        GoalConfig            `yaml:"goal,omitempty"`
 }
 
 // KeyInFile returnerer true hvis api_key er sat direkte i config-filen.

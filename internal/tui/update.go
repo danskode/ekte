@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -249,6 +250,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toolPanel.HalfViewDown()
 			} else {
 				m.conversation.HalfViewDown()
+			}
+			return m, nil
+
+		case tea.KeyCtrlY:
+			if text := m.lastAssistantText(); text != "" {
+				if err := clipboard.WriteAll(text); err == nil {
+					m.appendSystem("✓ Seneste svar kopieret til udklipsholder.")
+				}
 			}
 			return m, nil
 

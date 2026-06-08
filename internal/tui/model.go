@@ -362,7 +362,7 @@ func (m Model) statusBar() string {
 		if m.agent != nil && m.agent.SoundEnabled() {
 			soundIcon = "🔊"
 		}
-		right = styleStatusBar.Render(styleSystem.Render("PgUp/PgDn: scrol " + soundIcon + " · /hjælp"))
+		right = styleStatusBar.Render(styleSystem.Render("PgUp/PgDn: scrol · Ctrl+Y: kopiér " + soundIcon + " · /hjælp"))
 	}
 
 	left := styleStatusBar.Render(ctxStyled + skillIndicator)
@@ -530,4 +530,14 @@ func (m *Model) appendSystem(content string) {
 	m.messages = append(m.messages, provider.Message{Role: "system", Content: content})
 	m.conversation.SetContent(m.conversationContent())
 	m.conversation.GotoBottom()
+}
+
+// lastAssistantText returnerer indholdet af det seneste assistent-svar, eller "" hvis intet findes.
+func (m *Model) lastAssistantText() string {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Role == "assistant" && m.messages[i].Content != "" {
+			return m.messages[i].Content
+		}
+	}
+	return ""
 }

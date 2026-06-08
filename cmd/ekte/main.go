@@ -100,10 +100,14 @@ func runTUI(sessionArg string) {
 	}
 
 	var whitelist provider.WhitelistConfig
-	var hooks map[string]string
+	var hooks map[string]provider.HookConfig
+	var containers provider.ContainerConfig
+	var goal provider.GoalConfig
 	if cfg != nil {
 		whitelist = cfg.Whitelist
 		hooks = cfg.Hooks
+		containers = cfg.Containers
+		goal = cfg.Goal
 	}
 
 	// Brug lokal session-mappe hvis .ekte/ eksisterer, ellers global fallback
@@ -152,6 +156,8 @@ func runTUI(sessionArg string) {
 		SessionDir:    sessionDir,
 		Whitelist:     whitelist,
 		Hooks:         hooks,
+		Containers:    containers,
+		Goal:          goal,
 		Obs:           recorder,
 		Log:           logger,
 		ResumeSession: resumeSession,

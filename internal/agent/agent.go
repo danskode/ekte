@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danskode/ekte/internal/container"
 	"github.com/danskode/ekte/internal/dep"
 	"github.com/danskode/ekte/internal/ektelog"
 	"github.com/danskode/ekte/internal/git"
@@ -75,7 +76,9 @@ type Config struct {
 	SessionDir string
 	Skills     []skill.Skill
 	Whitelist  provider.WhitelistConfig
-	Hooks      map[string]string
+	Hooks      map[string]provider.HookConfig
+	Containers provider.ContainerConfig
+	Goal       provider.GoalConfig
 	Obs        *obs.Recorder
 	Log        *ektelog.Logger
 	// ResumeSession er en tidligere gemt session der skal indlæses ved opstart
@@ -177,7 +180,7 @@ func (a *Agent) SoundEnabled() bool           { return a.soundEnabled }
 func (a *Agent) Commands() []string {
 	builtin := []string{
 		"/hjælp", "/clear", "/compress", "/spec", "/wiki", "/wiki-get", "/wiki-gem",
-		"/forresten", "/hook", "/skills", "/dep", "/sec-check",
+		"/forresten", "/hook", "/goal", "/skills", "/dep", "/sec-check",
 		"/resume", "/navngiv", "/exit", "/sound", "/sound on", "/sound off",
 		"/observ", "/observ all", "/observ html",
 	}
@@ -244,6 +247,11 @@ func (a *Agent) ProcessStream(ctx context.Context, input string) <-chan Event {
 		}
 		if strings.HasPrefix(input, "/wiki-get") {
 			a.handleWikiGet(ctx, strings.TrimSpace(strings.TrimPrefix(input, "/wiki-get")), ch)
+			return
+		}
+		if strings.HasPrefix(input, "/goal") {
+			goalDesc := strings.TrimSpace(strings.TrimPrefix(input, "/goal"))
+			a.streamGoal(ctx, goalDesc, ch)
 			return
 		}
 		if strings.HasPrefix(input, "/") {
@@ -927,7 +935,7 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 		if !a.cfg.Whitelist.HookRun {
 			return []Event{{Type: EventSystem, Content: denyMsg("hook_run")}}
 		}
-		return a.handleHook(arg)
+		return a.handleHook(ctx, arg)
 
 	case "/dep":
 		if arg == "" {
@@ -1754,25 +1762,36 @@ func (a *Agent) handleHookList() []Event {
 	}
 	var sb strings.Builder
 	sb.WriteString("Tilgængelige hooks:\n\n")
-	for name, cmd := range a.cfg.Hooks {
-		sb.WriteString(fmt.Sprintf("  /hook %-16s → %s\n", name, cmd))
+	for name, hc := range a.cfg.Hooks {
+		label := hc.Cmd
+		if hc.Container != nil {
+			label += " [container: " + hc.Container.Image + "]"
+		}
+		sb.WriteString(fmt.Sprintf("  /hook %-16s → %s\n", name, label))
 	}
 	return []Event{{Type: EventSystem, Content: strings.TrimRight(sb.String(), "\n")}}
 }
 
-func (a *Agent) handleHook(name string) []Event {
-	cmd, ok := a.cfg.Hooks[name]
+func (a *Agent) handleHook(ctx context.Context, name string) []Event {
+	hc, ok := a.cfg.Hooks[name]
 	if !ok {
 		// fallback: .ekte/hooks/<name> som script
 		script := ".ekte/hooks/" + name
 		if _, err := os.Stat(script); err != nil {
 			return []Event{{Type: EventSystem, Content: fmt.Sprintf("Hook ikke fundet: %s\n\nKør '/hook' for at se tilgængelige hooks.", name)}}
 		}
-		cmd = script
+		hc = provider.HookConfig{Cmd: script}
+	}
+
+	if hc.Container != nil {
+		if !a.cfg.Whitelist.HookContainer {
+			return []Event{{Type: EventSystem, Content: denyMsg("hook_container")}}
+		}
+		return a.runContainerHook(ctx, name, hc)
 	}
 
 	var buf bytes.Buffer
-	c := exec.Command("sh", "-c", cmd)
+	c := exec.Command("sh", "-c", hc.Cmd)
 	c.Stdout = &buf
 	c.Stderr = &buf
 
@@ -1783,7 +1802,7 @@ func (a *Agent) handleHook(name string) []Event {
 		output = "(ingen output)"
 	}
 
-	header := fmt.Sprintf("hook: %s\n$ %s\n\n", name, cmd)
+	header := fmt.Sprintf("hook: %s\n$ %s\n\n", name, hc.Cmd)
 	toolContent := header + output
 
 	var status string
@@ -1797,6 +1816,154 @@ func (a *Agent) handleHook(name string) []Event {
 		{Type: EventToolOutput, Content: toolContent},
 		{Type: EventSystem, Content: status},
 	}
+}
+
+func (a *Agent) runContainerHook(ctx context.Context, name string, hc provider.HookConfig) []Event {
+	runtime, err := container.DetectRuntime(a.cfg.Containers.Runtime)
+	if err != nil {
+		return []Event{{Type: EventSystem, Content: fmt.Sprintf(
+			"⛔ Ingen container-runtime fundet: %v\n\n"+
+				"Installer Docker (https://docs.docker.com/get-docker/) eller Podman,\n"+
+				"eller fjern 'container:'-feltet fra hook '%s' for at køre direkte på host.",
+			err, name,
+		)}}
+	}
+
+	spec := container.Spec{
+		Runtime:     runtime,
+		Image:       hc.Container.Image,
+		Cmd:         hc.Cmd,
+		WorkdirHost: a.cfg.WorkDir,
+		WorkdirCtr:  "/work",
+		Network:     hc.Container.Network,
+		Ports:       hc.Container.Ports,
+		Memory:      hc.Container.Memory,
+		CPUs:        hc.Container.CPUs,
+		Env:         hc.Container.Env,
+	}
+	if hc.Container.Workdir != "" {
+		spec.WorkdirCtr = hc.Container.Workdir
+	}
+	// Defaults fra global ContainerConfig
+	if spec.Memory == "" {
+		spec.Memory = a.cfg.Containers.DefaultMemory
+	}
+	if spec.CPUs == "" {
+		spec.CPUs = a.cfg.Containers.DefaultCPUs
+	}
+	timeoutSec := a.cfg.Containers.TimeoutSeconds
+	if timeoutSec > 0 {
+		spec.Timeout = time.Duration(timeoutSec) * time.Second
+	}
+
+	header := fmt.Sprintf("hook (container): %s\n  image: %s\n$ %s\n\n", name, spec.Image, spec.Cmd)
+
+	res, runErr := container.Run(ctx, spec)
+	output := strings.TrimRight(res.Output, "\n")
+	if output == "" {
+		output = "(ingen output)"
+	}
+	if res.Truncated {
+		output += "\n\n[... output afkortet]"
+	}
+	if res.TimedOut {
+		output += "\n\n[... processen blev afbrudt: timeout]"
+	}
+
+	toolContent := header + output
+
+	var status string
+	switch {
+	case runErr != nil && !res.TimedOut:
+		status = fmt.Sprintf("✗ Container-hook fejlede: %s (%v)", name, runErr)
+	case res.TimedOut:
+		status = fmt.Sprintf("✗ Container-hook timeout: %s", name)
+	case res.ExitCode != 0:
+		status = fmt.Sprintf("✗ Container-hook fejlede: %s (exit %d)", name, res.ExitCode)
+	default:
+		status = fmt.Sprintf("✓ Container-hook gennemført: %s", name)
+	}
+
+	return []Event{
+		{Type: EventToolOutput, Content: toolContent},
+		{Type: EventSystem, Content: status},
+	}
+}
+
+func (a *Agent) streamGoal(ctx context.Context, goalDesc string, ch chan<- Event) {
+	if goalDesc == "" {
+		ch <- Event{Type: EventSystem, Content: "Brug: /goal <beskrivelse af målet>"}
+		return
+	}
+	cfg := a.cfg.Goal
+	if cfg.CheckHook == "" {
+		ch <- Event{Type: EventSystem, Content: "⛔ goal.check_hook er ikke konfigureret.\n\nTilføj til .ekte/config.yaml:\n\n  goal:\n    check_hook: compile\n    max_iterations: 10"}
+		return
+	}
+	if _, ok := a.cfg.Hooks[cfg.CheckHook]; !ok {
+		ch <- Event{Type: EventSystem, Content: fmt.Sprintf("⛔ check_hook '%s' ikke fundet i hooks-konfigurationen.", cfg.CheckHook)}
+		return
+	}
+
+	maxIter := cfg.MaxIterations
+	if maxIter <= 0 {
+		maxIter = 10
+	}
+
+	var lastCheckOutput string
+
+	for i := 0; i < maxIter; i++ {
+		if ctx.Err() != nil {
+			return
+		}
+
+		ch <- Event{Type: EventSystem, Content: fmt.Sprintf("── Goal iteration %d/%d ──", i+1, maxIter)}
+
+		var prompt string
+		if i == 0 {
+			prompt = fmt.Sprintf(
+				"Dit mål er:\n%s\n\n"+
+					"Analysér projektstrukturen og implementér derefter mod målet. "+
+					"Brug de tilgængelige fil-tools til at skrive og redigere kode.",
+				goalDesc,
+			)
+		} else {
+			prompt = fmt.Sprintf(
+				"Forrige build-output:\n```\n%s\n```\n\n"+
+					"Målet er endnu ikke nået. Ret fejlene og forbedre koden mod målet:\n%s",
+				lastCheckOutput, goalDesc,
+			)
+		}
+
+		a.streamChat(ctx, prompt, ch)
+
+		if ctx.Err() != nil {
+			return
+		}
+
+		ch <- Event{Type: EventSystem, Content: fmt.Sprintf("Kører check-hook: /hook %s", cfg.CheckHook)}
+		hookEvents := a.handleHook(ctx, cfg.CheckHook)
+
+		success := false
+		for _, ev := range hookEvents {
+			ch <- ev
+			if ev.Type == EventToolOutput {
+				lastCheckOutput = ev.Content
+			}
+			if ev.Type == EventSystem && strings.HasPrefix(ev.Content, "✓") {
+				success = true
+			}
+		}
+
+		if success {
+			ch <- Event{Type: EventSystem, Content: fmt.Sprintf("✓ Mål nået efter %d iteration(er).", i+1)}
+			return
+		}
+	}
+
+	ch <- Event{Type: EventSystem, Content: fmt.Sprintf(
+		"✗ Mål ikke nået efter %d iterationer.\n\nPrøv at øge goal.max_iterations eller reformulér målet.", maxIter,
+	)}
 }
 
 func denyMsg(key string) string {
@@ -1815,6 +1982,7 @@ func helpText() string {
 		{"/compress", "komprimer kontekstvindue"},
 		{"/wiki \"spørgsmål\"", "søg i din personlige wiki"},
 		{"/hook [navn]", "vis hooks — angiv navn for at køre"},
+		{"/goal <beskrivelse>", "autonom mål-loop: skriv kode → byg → gentag til succes"},
 		{"/dep <modul>", "sikkerhedsscore for én Go-afhængighed"},
 		{"/sec-check", "scan alle afhængigheder + ekte-harness"},
 		{"/forresten <besked>", "side-chat med subagent (husker historik)"},
