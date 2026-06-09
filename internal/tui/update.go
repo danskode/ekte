@@ -584,8 +584,13 @@ func (m *Model) syncFromAgent() {
 		return
 	}
 	m.tokenCount = m.agent.TokenCount()
-	// Ved resume: kopiér agent-messages til TUI hvis TUI endnu er tom.
-	if msgs := m.agent.Messages(); len(msgs) > 0 && len(m.messages) == 0 {
-		m.messages = msgs
+	// Ved resume: kopiér kun user/assistant-beskeder til TUI.
+	// System-beskeder (prompt, hukommelse, profil) hører ikke til i chat-visningen.
+	if msgs := m.agent.Messages(); len(m.messages) == 0 {
+		for _, msg := range msgs {
+			if msg.Role == "user" || msg.Role == "assistant" {
+				m.messages = append(m.messages, msg)
+			}
+		}
 	}
 }
