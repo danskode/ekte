@@ -1531,7 +1531,7 @@ func (a *Agent) savePlanFile(content string) (string, error) {
 	}
 	slug := time.Now().Format("20060102-150405")
 	path := filepath.Join(planDir, slug+".md")
-	if err := os.WriteFile(path, []byte(sanitizeFileContent(content)), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(sanitizeFileContent(content)), 0600); err != nil {
 		return "", err
 	}
 	a.planFile = path
@@ -2889,6 +2889,16 @@ func (a *Agent) streamGoal(ctx context.Context, goalDesc string, ch chan<- Event
 	if maxIter <= 0 {
 		maxIter = 10
 	}
+	const maxGoalIterationsHardCap = 50
+	if maxIter > maxGoalIterationsHardCap {
+		maxIter = maxGoalIterationsHardCap
+	}
+
+	// goal-loopet deaktiverer auto_approve for fil-operationer — autonome
+	// iterationer må ikke skrive filer ubevogtet selv med -y/--yes flag.
+	savedAutoApprove := a.cfg.Whitelist.AutoApprove
+	a.cfg.Whitelist.AutoApprove = false
+	defer func() { a.cfg.Whitelist.AutoApprove = savedAutoApprove }()
 
 	var lastCheckOutput string
 

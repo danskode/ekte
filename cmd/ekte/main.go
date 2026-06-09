@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/danskode/ekte/internal/agent"
 	"github.com/danskode/ekte/internal/ektelog"
@@ -510,7 +511,9 @@ var memoryInjectionPattern = regexp.MustCompile(`(?i)(` +
 	`)`)
 
 func sanitizeMemoryContent(content string) string {
-	lines := strings.Split(content, "\n")
+	// NFKC-normaliser inden regex-match for at fange Unicode-homoglyf-omgåelser.
+	normalized := norm.NFKC.String(content)
+	lines := strings.Split(normalized, "\n")
 	for i, line := range lines {
 		if memoryInjectionPattern.MatchString(line) {
 			lines[i] = "[linje fjernet: mulig prompt injection]"

@@ -202,6 +202,7 @@ var sensitivePatterns = []string{
 	"terraform.tfstate",
 	"passwd", "shadow",
 	"secret", "password", "token",
+	".ekte/config", // forhindrer LLM i at læse provider-konfiguration (API-nøgler)
 }
 
 func isSensitivePath(abs string) bool {
@@ -277,10 +278,20 @@ func searchFiles(args map[string]any, root string) (string, error) {
 		if err != nil {
 			return nil
 		}
-		// Spring .git/, vendor/ og node_modules/ over — men ikke .ekte/ (agenten skal
-		// kunne finde filer den selv opretter der, fx skills og memory).
-		if d.IsDir() && (d.Name() == ".git" || d.Name() == "vendor" || d.Name() == "node_modules") {
-			return filepath.SkipDir
+		// Spring interne kataloger over. .ekte/sessions/ og .ekte/hooks/ indeholder
+		// session-historik og hook-scripts der ikke er relevante for LLM-søgning.
+		// .ekte/skills/ og .ekte/memory/ er søgbare (agentoprettede filer).
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "vendor", "node_modules":
+				return filepath.SkipDir
+			case "sessions", "hooks":
+				// Spring .ekte/sessions/ og .ekte/hooks/ over, men kun inde i .ekte/
+				rel2, _ := filepath.Rel(root, path)
+				if strings.HasPrefix(rel2, ".ekte"+string(filepath.Separator)) {
+					return filepath.SkipDir
+				}
+			}
 		}
 		if d.IsDir() {
 			return nil
