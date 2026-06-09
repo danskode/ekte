@@ -463,13 +463,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamBuf = ""
 			m.streamCh = nil
 			if msg.Content != "" {
-				m.messages = append(m.messages, provider.Message{Role: "assistant", Content: msg.Content})
-			}
-			if msg.Source != "" {
-				m.messages = append(m.messages, provider.Message{
-					Role:    "system",
-					Content: "Information fra 📚 wiki · " + msg.Source,
-				})
+				m.messages = append(m.messages, provider.Message{Role: "assistant", Content: msg.Content, Source: msg.Source})
 			}
 			if msg.Stats != "" {
 				m.messages = append(m.messages, provider.Message{
@@ -489,13 +483,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// gang som det "levende" streamBuf), indtil næste EventThinking rydder den.
 			m.streamBuf = ""
 			if msg.Content != "" {
-				m.messages = append(m.messages, provider.Message{Role: "assistant", Content: msg.Content})
-			}
-			if msg.Source != "" {
-				m.messages = append(m.messages, provider.Message{
-					Role:    "system",
-					Content: "Information fra 📚 wiki · " + msg.Source,
-				})
+				m.messages = append(m.messages, provider.Message{Role: "assistant", Content: msg.Content, Source: msg.Source})
 			}
 			m.conversation.SetContent(m.conversationContent())
 			m.conversation.GotoBottom()

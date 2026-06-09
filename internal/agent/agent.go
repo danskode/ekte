@@ -206,6 +206,11 @@ func New(cfg Config) *Agent {
 		sb.WriteString("\nNår brugeren beder om at kompilere, teste eller køre projektet, skal du instruere dem i at bruge de relevante hooks frem for at forsøge at køre kommandoerne selv.")
 		a.messages = append(a.messages, provider.Message{Role: "system", Content: sb.String()})
 	}
+	// Sæt initial tokenCount så x/N i statuslinjen er korrekt fra start —
+	// resume-stien sætter den allerede (linje ~180), men nye sessioner gjorde det ikke.
+	if a.tokenCount == 0 {
+		a.tokenCount = estimateTokens(a.messages)
+	}
 	cfg.Log.Info("agent initialiseret", "provider", cfg.ProviderName, "model", cfg.ModelName)
 	return a
 }
@@ -361,20 +366,58 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 		a.log().Info("historik trimmet", "messages_før", beforeTrim, "messages_efter", len(msgs))
 	}
 
-	// Injicér wiki som autoritativ kilde — skal altid prioriteres over generel viden.
-	// Wiki-indholdet begrænses til maks 40% af contextSize for at undgå overflow.
-	var wikiSource string
+	toolDefs := tools.Definitions(a.cfg.Whitelist.FileRead, a.cfg.Whitelist.FileWrite)
+	if a.cfg.Whitelist.HookRun && len(a.cfg.Hooks) > 0 {
+		toolDefs = append(toolDefs, a.hookToolDefinition())
+	}
+	workdir := a.cfg.WorkDir
+	if workdir == "" {
+		workdir, _ = os.Getwd()
+	}
+
+	// Auto-compress vurderes på historikken ALENE (uden wiki) så wiki-indhold ikke
+	// fejlagtigt trigger en compress der herefter glemmer at genindsætte wiki.
+	tokEst := estimateTokens(msgs)
+	if a.cfg.ContextSize > 0 && float64(tokEst)/float64(a.cfg.ContextSize) >= autoCompressThreshold {
+		pct := int(float64(tokEst) / float64(a.cfg.ContextSize) * 100)
+		for _, ev := range a.compressMessages(ctx) {
+			ch <- ev
+		}
+		ch <- Event{Type: EventSystem, Content: fmt.Sprintf("⚡ Auto-komprimeret kontekst (var %d%% fuld)", pct)}
+		msgs = a.messagesWithSkill()
+		msgs = trimHistory(msgs, maxHistoryMessages)
+		tokEst = estimateTokens(msgs)
+	}
+
+	// Injicér wiki EFTER evt. compress, med et budget baseret på den resterende
+	// kontekstplads. Wiki er efemær — den gemmes ikke i a.messages og skal
+	// genindsættes ved hvert kald, også efter compress.
 	wikiIdx := -1
 	if a.cfg.Wiki != nil && wiki.HasSubstantiveQuery(input) {
 		_, pages, err := a.cfg.Wiki.Query(input)
 		if err == nil && len(pages) > 0 {
+			// Beregn budgetteret max-tegn per side med samme logik som /wiki.
+			effectiveCtx := a.cfg.ContextSize
+			if effectiveCtx <= 0 {
+				effectiveCtx = 4096
+			}
+			maxPageExcerptChars := 1200
+			budgetTokens := int(float64(effectiveCtx)*0.35) - tokEst
+			if budgetTokens < 200 {
+				budgetTokens = 200
+			}
+			perPage := (budgetTokens * 4) / len(pages)
+			if perPage < 200 {
+				perPage = 200
+			}
+			if perPage < maxPageExcerptChars {
+				maxPageExcerptChars = perPage
+			}
+
 			var ctxBuilder strings.Builder
 			var paths []string
 			ctxBuilder.WriteString("VIGTIG INSTRUKTION: Følgende wiki-sider er projektets kilde til sandhed.\n")
 			ctxBuilder.WriteString("Kodestandarder, arkitektur og ønsker herfra SKAL følges og prioriteres over generel viden.\n\n")
-			// Injicér kun et uddrag per side (maks 3000 tegn ≈ 750 tokens).
-			// Fuldt indhold vises til brugeren via /wiki — LLM'en får nok til at svare.
-			const maxPageExcerptChars = 3000
 			for _, p := range pages {
 				excerpt := p.Content
 				truncated := false
@@ -394,36 +437,14 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 			}
 			msgs = append([]provider.Message{{Role: "system", Content: ctxBuilder.String()}}, msgs...)
 			wikiIdx = 0
-			wikiSource = "📚 " + strings.Join(paths, " · ")
+			tokEst = estimateTokens(msgs)
 		}
-	}
-
-	toolDefs := tools.Definitions(a.cfg.Whitelist.FileRead, a.cfg.Whitelist.FileWrite)
-	if a.cfg.Whitelist.HookRun && len(a.cfg.Hooks) > 0 {
-		toolDefs = append(toolDefs, a.hookToolDefinition())
-	}
-	workdir := a.cfg.WorkDir
-	if workdir == "" {
-		workdir, _ = os.Getwd()
 	}
 
 	// Første kald streamer altid — tool calls akkumuleres og håndteres bagefter.
-	tokEst := estimateTokens(msgs)
 	ctxLog := []any{"messages", len(msgs), "tokens_est", tokEst, "tools", len(toolDefs), "model", a.cfg.ModelName}
 	if a.cfg.ContextSize > 0 {
 		ctxLog = append(ctxLog, "ctx_size", a.cfg.ContextSize, "ctx_pct", fmt.Sprintf("%.0f%%", float64(tokEst)/float64(a.cfg.ContextSize)*100))
-		// Auto-compress: kontekst over 85% → komprimer stille inden næste kald
-		if float64(tokEst)/float64(a.cfg.ContextSize) >= autoCompressThreshold {
-			pct := int(float64(tokEst) / float64(a.cfg.ContextSize) * 100)
-			for _, ev := range a.compressMessages(ctx) {
-				ch <- ev
-			}
-			ch <- Event{Type: EventSystem, Content: fmt.Sprintf("⚡ Auto-komprimeret kontekst (var %d%% fuld)", pct)}
-			// Genbyg msgs fra den komprimerede historik
-			msgs = a.messagesWithSkill()
-			msgs = trimHistory(msgs, maxHistoryMessages)
-			tokEst = estimateTokens(msgs)
-		}
 	}
 	a.log().Info("stream start", ctxLog...)
 
@@ -584,7 +605,7 @@ streamAttempts:
 		a.recordTurn(input, streamResp, msgs, wikiIdx)
 		a.messages = append(a.messages, provider.Message{Role: "assistant", Content: full})
 		a.tokenCount = estimateTokens(a.messages)
-		ch <- Event{Type: EventStreamDone, Content: full, Source: wikiSource, Stats: streamStats}
+		ch <- Event{Type: EventStreamDone, Content: full, Source: "", Stats: streamStats}
 		ch <- Event{Type: EventTokenCount, Tokens: a.tokenCount}
 		return
 	}
@@ -758,11 +779,12 @@ streamAttempts:
 					if p, ok := args["path"].(string); ok {
 						// Normaliser til lowercase for at fange omgåelsesforsøg på
 						// case-insensitive filsystemer (macOS, Windows).
-						pLow := strings.ToLower(filepath.Clean(p))
+						// filepath.ToSlash normaliserer separatorer (Windows backslash).
+						pLow := strings.ToLower(filepath.ToSlash(filepath.Clean(p)))
 						isHarnessFile = strings.Contains(pLow, ".ekte/config.yaml") ||
 							strings.Contains(pLow, ".ekte/skills/") ||
 							strings.Contains(pLow, ".ekte/memory/") ||
-							strings.HasSuffix(pLow, "ekte.md")
+							filepath.Base(pLow) == "ekte.md"
 					}
 				}
 			}
@@ -936,7 +958,7 @@ streamAttempts:
 			a.recordTurn(input, resp, msgs, wikiIdx)
 			a.messages = append(a.messages, provider.Message{Role: "assistant", Content: finalContent})
 			a.tokenCount = actualOrEstimate(resp, a.messages)
-			ch <- Event{Type: EventStreamDone, Content: finalContent, Source: wikiSource, Stats: followStats}
+			ch <- Event{Type: EventStreamDone, Content: finalContent, Source: "", Stats: followStats}
 			ch <- Event{Type: EventTokenCount, Tokens: a.tokenCount}
 			return
 		}
@@ -1249,7 +1271,7 @@ func (a *Agent) handleRemember(arg string) []Event {
 	if a.cfg.WorkDirForMemory != "" {
 		memDir = filepath.Join(a.cfg.WorkDirForMemory, ".ekte", "memory")
 	}
-	if err := os.MkdirAll(memDir, 0755); err != nil {
+	if err := os.MkdirAll(memDir, 0700); err != nil {
 		return []Event{{Type: EventSystem, Content: "Fejl: kunne ikke oprette hukommelsesmappe: " + err.Error()}}
 	}
 	slug := time.Now().Format("20060102-150405")
@@ -1296,7 +1318,8 @@ func (a *Agent) handleContext() []Event {
 		skillName = a.activeSkill.Name
 	}
 
-	total := sysTok + memTok + histTok + skillTok
+	// estimateTokens bruger samme formel som x/N i statuslinjen (+500 overhead)
+	total := estimateTokens(a.messages) + skillTok
 	contextMax := a.cfg.ContextSize
 	pct := ""
 	if contextMax > 0 {
@@ -1566,7 +1589,7 @@ func (a *Agent) savePlanFile(content string) (string, error) {
 	if a.cfg.WorkDirForMemory != "" {
 		planDir = filepath.Join(a.cfg.WorkDirForMemory, ".ekte", "plans")
 	}
-	if err := os.MkdirAll(planDir, 0755); err != nil {
+	if err := os.MkdirAll(planDir, 0700); err != nil {
 		return "", err
 	}
 	slug := time.Now().Format("20060102-150405")
@@ -2085,26 +2108,69 @@ func (a *Agent) handleWiki(ctx context.Context, arg string) []Event {
 		return []Event{{Type: EventSystem, Content: "✓ Gemt i wiki: " + path}}
 	}
 
-	wikiCtx, pages, err := a.cfg.Wiki.Query(arg)
+	_, pages, err := a.cfg.Wiki.Query(arg)
 	if err != nil {
 		return []Event{{Type: EventError, Content: "Wiki-fejl: " + err.Error()}}
 	}
-	msgs := append([]provider.Message{{Role: "system", Content: wikiCtx}}, a.messages...)
+
+	// Byg en trunkeret wiki-kontekst med samme budget-logik som streamChat.
+	// Den rå buildContext-streng (fuld sideindhold) kan nemt sprænge LM Studios
+	// kontekstvindue og give "tokens to keep > context length"-fejl.
+	baseMsgs := trimHistory(a.messages, maxHistoryMessages)
+	baseTok := estimateTokens(baseMsgs)
+
+	// Beregn max tegn per wiki-side. Vi bruger ContextSize hvis den er sat, ellers
+	// et konservativt fast loft. ContextSize afspejler muligvis ikke præcist hvad
+	// LM Studio faktisk har indlæst som n_ctx — brug 85% som sikkerhedsmargen.
+	effectiveCtx := a.cfg.ContextSize
+	if effectiveCtx <= 0 {
+		effectiveCtx = 4096 // konservativt fald-tilbage
+	}
+	maxPageExcerptChars := 1200 // fast loft: ca. 300 tokens/side
+	if len(pages) > 0 {
+		// wiki må bruge maks 35% af effektiv kontekst minus den allerede brugte plads
+		budgetTokens := int(float64(effectiveCtx)*0.35) - baseTok
+		if budgetTokens < 200 {
+			budgetTokens = 200
+		}
+		perPage := (budgetTokens * 4) / len(pages) // tokens → tegn
+		if perPage < 200 {
+			perPage = 200
+		}
+		if perPage < maxPageExcerptChars {
+			maxPageExcerptChars = perPage
+		}
+	}
+
+	var ctxBuilder strings.Builder
+	var paths []string
+	ctxBuilder.WriteString(fmt.Sprintf("Relevante wiki-sider for '%s':\n\n", arg))
+	for _, p := range pages {
+		excerpt := p.Content
+		truncated := false
+		if len(excerpt) > maxPageExcerptChars {
+			excerpt = excerpt[:maxPageExcerptChars]
+			if idx := strings.LastIndex(excerpt, "\n"); idx > maxPageExcerptChars/2 {
+				excerpt = excerpt[:idx]
+			}
+			truncated = true
+		}
+		note := ""
+		if truncated {
+			note = "\n[side afkortet — brug /wiki for fuld version]"
+		}
+		ctxBuilder.WriteString(fmt.Sprintf("--- %s ---\n%s%s\n\n", p.Path, excerpt, note))
+		paths = append(paths, p.Path)
+	}
+
+	msgs := append([]provider.Message{{Role: "system", Content: ctxBuilder.String()}}, baseMsgs...)
 	msgs = append(msgs, provider.Message{Role: "user", Content: arg})
 	resp, err := a.cfg.Provider.Chat(ctx, msgs)
 	if err != nil {
 		return []Event{{Type: EventError, Content: err.Error()}}
 	}
-	var source string
-	if len(pages) > 0 {
-		var paths []string
-		for _, p := range pages {
-			paths = append(paths, p.Path)
-		}
-		source = strings.Join(paths, " · ")
-	}
 	return []Event{
-		{Type: EventAssistant, Content: resp.Content, Source: source},
+		{Type: EventAssistant, Content: resp.Content, Source: strings.Join(paths, " · ")},
 	}
 }
 

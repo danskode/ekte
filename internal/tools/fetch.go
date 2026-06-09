@@ -36,15 +36,6 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-// ssrfBlocked laver en syntaktisk pre-check der afviser åbenlyst ugyldige URLs
-// inden forbindelsen oprettes. Den robuste SSRF-beskyttelse sker i DialContext
-// (newSafeHTTPClient) som resolver DNS og validerer IP'en ved forbindelsestid —
-// det eliminerer TOCTOU og håndterer decimale/oktale IP-formater korrekt.
-func ssrfBlocked(rawURL string) bool {
-	_, err := url.Parse(rawURL)
-	return err != nil
-}
-
 // newSafeHTTPClient returnerer en http.Client med en DialContext-hook der
 // resolver DNS og validerer den opnåede IP inden forbindelsen etableres.
 // Dette eliminerer SSRF TOCTOU-vinduet: DNS resolver kun ét sted.
@@ -81,10 +72,11 @@ func newSafeHTTPClient() *http.Client {
 
 // FetchURL henter indhold fra en URL og returnerer ren tekst.
 // HTML strippes for tags; andre formater returneres råt (max 1MB).
-// Private og cloud-metadata IP-ranges afvises (SSRF-beskyttelse).
+// SSRF-beskyttelse: newSafeHTTPClient() resolver DNS og validerer IP-adresser
+// i DialContext ved forbindelsestid — håndterer decimal/oktal IP korrekt.
 func FetchURL(rawURL string) (string, error) {
-	if ssrfBlocked(rawURL) {
-		return "", fmt.Errorf("URL afvist: peger på privat eller intern adresse (%s)", rawURL)
+	if _, err := url.Parse(rawURL); err != nil {
+		return "", fmt.Errorf("ugyldig URL: %w", err)
 	}
 	client := newSafeHTTPClient()
 	resp, err := client.Get(rawURL)

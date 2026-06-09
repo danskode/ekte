@@ -273,7 +273,12 @@ func (m Model) conversationContent() string {
 			sb.WriteString(header + "\n" + body + "\n\n")
 		case "assistant":
 			header := m.msgHeader(styleAssistantLabel.Render("🤖 "+agentName), w)
-			sb.WriteString(header + "\n" + renderMd(msg.Content) + "\n\n")
+			body := renderMd(msg.Content)
+			if msg.Source != "" {
+				dimStyle := lipgloss.NewStyle().Foreground(colorSubtle)
+				body += "\n" + dimStyle.Render("◦ Information fra 📚 wiki · "+wordWrap(msg.Source, w-2))
+			}
+			sb.WriteString(header + "\n" + body + "\n\n")
 		case "system":
 			sb.WriteString(styleSystem.Render("◦ "+wordWrap(msg.Content, w-2)) + "\n\n")
 		case "forresten":

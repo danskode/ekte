@@ -8,8 +8,9 @@ import (
 type Message struct {
 	Role       string
 	Content    string
-	ToolCallID string      // bruges ved role:"tool" svar
-	ToolCalls  []ToolCall  // bruges ved role:"assistant" med tool calls
+	Source     string     // wiki-kilde, vises under assistent-svar
+	ToolCallID string     // bruges ved role:"tool" svar
+	ToolCalls  []ToolCall // bruges ved role:"assistant" med tool calls
 }
 
 type ToolCall struct {
