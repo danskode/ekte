@@ -23,10 +23,13 @@ func isPrivateIP(ip net.IP) bool {
 	if ip.IsPrivate() { // dækker 10/8, 172.16/12, 192.168/16, fc00::/7
 		return true
 	}
-	// cloud metadata: 169.254.169.254 (allerede dækket af IsLinkLocalUnicast,
-	// men eksplicit for klarhed)
 	if ip4 := ip.To4(); ip4 != nil {
+		// 169.254.0.0/16 cloud metadata (dækket af IsLinkLocalUnicast, men eksplicit)
 		if ip4[0] == 169 && ip4[1] == 254 {
+			return true
+		}
+		// 0.0.0.0/8 — net.IP.IsPrivate() og IsLoopback() returnerer begge false for disse
+		if ip4[0] == 0 {
 			return true
 		}
 	}

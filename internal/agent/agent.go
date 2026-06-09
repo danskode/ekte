@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -734,14 +735,17 @@ streamAttempts:
 			// gælder ikke for filer der definerer agentens egen adfærd. Dette kan ikke
 			// konfigureres væk, heller ikke med -y/auto_approve.
 			isHarnessFile := false
-			if tc.Name == "write_file" || tc.Name == "edit_file" {
+			if tc.Name == "write_file" || tc.Name == "edit_file" || tc.Name == "create_dir" {
 				var args map[string]any
 				if json.Unmarshal(tc.Input, &args) == nil {
 					if p, ok := args["path"].(string); ok {
-						isHarnessFile = strings.Contains(p, ".ekte/config.yaml") ||
-							strings.Contains(p, ".ekte/skills/") ||
-							strings.Contains(p, ".ekte/memory/") ||
-							strings.HasSuffix(p, "ekte.md")
+						// Normaliser til lowercase for at fange omgåelsesforsøg på
+						// case-insensitive filsystemer (macOS, Windows).
+						pLow := strings.ToLower(filepath.Clean(p))
+						isHarnessFile = strings.Contains(pLow, ".ekte/config.yaml") ||
+							strings.Contains(pLow, ".ekte/skills/") ||
+							strings.Contains(pLow, ".ekte/memory/") ||
+							strings.HasSuffix(pLow, "ekte.md")
 					}
 				}
 			}
@@ -1782,9 +1786,13 @@ func (a *Agent) advanceModelWizard(input string) []Event {
 		if w.contextSize > 0 {
 			ctxLine = fmt.Sprintf("  Kontekst:    %d tokens\n", w.contextSize)
 		}
+		privateWarn := ""
+		if baseURLIsPrivate(w.baseURL) {
+			privateWarn = "\n⚠ URL peger på lokal/privat adresse — bekræft at du selv har sat den."
+		}
 		return []Event{{Type: EventSystem, Content: fmt.Sprintf(
-			"Gem denne konfiguration?\n\n  Provider:    %s\n%s  Model:       %s\n%s\nj = gem · n/annuller = afbryd",
-			w.provider, urlLine, w.model, ctxLine)}}
+			"Gem denne konfiguration?\n\n  Provider:    %s\n%s  Model:       %s\n%s\nj = gem · n/annuller = afbryd%s",
+			w.provider, urlLine, w.model, ctxLine, privateWarn)}}
 
 	case 4: // bekræft
 		if low == "j" || low == "ja" || low == "y" || low == "yes" {
@@ -1803,7 +1811,29 @@ func validateBaseURL(raw string) error {
 	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
 		return fmt.Errorf("URL skal starte med http:// eller https://")
 	}
+	if _, err := url.Parse(raw); err != nil {
+		return fmt.Errorf("ugyldig URL: %w", err)
+	}
 	return nil
+}
+
+// baseURLIsPrivate returnerer true hvis URL peger på en lokal/privat IP.
+// Bruges til at vise en advarsel i wizarden — lokale endpoints som LM Studio
+// er legitime og blokeres ikke, men brugeren informeres.
+func baseURLIsPrivate(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" || host == "ip6-localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
 func (a *Agent) applyModelConfig() []Event {

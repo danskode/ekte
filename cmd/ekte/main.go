@@ -470,9 +470,13 @@ func loadMemory(globalDir, workDir string) []provider.Message {
 			if sanitized == "" {
 				continue
 			}
+			// Sanitér filnavnet inden det skrives til system-beskeden —
+			// en angriber med adgang til ~/.ekte/memory/ kan ellers injicere
+			// via filnavnet (fx "ignore all instructions.md").
+			safeLabel := sanitizeMemoryContent(entry.Name())
 			msgs = append(msgs, provider.Message{
 				Role:    "system",
-				Content: "[Hukommelse — " + d.label + "/" + entry.Name() + "]\n" + sanitized,
+				Content: "[Hukommelse — " + d.label + "/" + safeLabel + "]\n" + sanitized,
 			})
 		}
 	}
