@@ -146,11 +146,31 @@ func buildArgs(spec Spec, name string) []string {
 		args = append(args, "--network", "none")
 	}
 
+	// Kør altid med minimale privileges — reducer angrebsflade ved container-escape.
+	args = append(args,
+		"--user=nobody:nogroup",
+		"--cap-drop=ALL",
+		"--security-opt=no-new-privileges",
+	)
+
 	args = append(args, "--memory", spec.Memory)
 	args = append(args, "--cpus", spec.CPUs)
 
 	for _, p := range spec.Ports {
-		if portSpecRe.MatchString(p) {
+		if !portSpecRe.MatchString(p) {
+			continue
+		}
+		// Valider at porter er i gyldigt interval 1-65535.
+		parts := strings.SplitN(p, ":", 2)
+		valid := true
+		for _, part := range parts {
+			n := 0
+			if _, err := fmt.Sscanf(part, "%d", &n); err != nil || n < 1 || n > 65535 {
+				valid = false
+				break
+			}
+		}
+		if valid {
 			args = append(args, "-p", p)
 		}
 	}

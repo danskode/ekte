@@ -119,6 +119,7 @@ func runTUI(sessionArg string, autoApprove bool) {
 	}
 	if autoApprove {
 		whitelist.AutoApprove = true
+		fmt.Fprintln(os.Stderr, "⚠  -y/--yes: fil-bekræftelser er deaktiveret — LLM kan skrive filer uden godkendelse")
 	}
 
 	// Brug lokal session-mappe hvis .ekte/ eksisterer, ellers global fallback

@@ -36,22 +36,13 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-// ssrfBlocked laver en hurtig check inden forbindelsen oprettes — afviser
-// literale private IP-adresser og kendte loopback-navne uden DNS-opslag.
+// ssrfBlocked laver en syntaktisk pre-check der afviser åbenlyst ugyldige URLs
+// inden forbindelsen oprettes. Den robuste SSRF-beskyttelse sker i DialContext
+// (newSafeHTTPClient) som resolver DNS og validerer IP'en ved forbindelsestid —
+// det eliminerer TOCTOU og håndterer decimale/oktale IP-formater korrekt.
 func ssrfBlocked(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	host := u.Hostname()
-	if host == "localhost" || host == "ip6-localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	if ip != nil {
-		return isPrivateIP(ip)
-	}
-	return false
+	_, err := url.Parse(rawURL)
+	return err != nil
 }
 
 // newSafeHTTPClient returnerer en http.Client med en DialContext-hook der
