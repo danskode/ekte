@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -13,8 +14,27 @@ import (
 	"golang.org/x/net/html"
 )
 
-// ssrfBlocked returnerer true hvis URL peger på en intern/privat adresse.
-// Beskytter mod SSRF når ekte kører i container med adgang til interne netværk.
+// isPrivateIP returnerer true for loopback, link-local, private og ULA-adresser.
+// Bruger Go 1.17+ ip.IsPrivate() der korrekt håndterer IPv6 ULA (fc00::/7).
+func isPrivateIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	if ip.IsPrivate() { // dækker 10/8, 172.16/12, 192.168/16, fc00::/7
+		return true
+	}
+	// cloud metadata: 169.254.169.254 (allerede dækket af IsLinkLocalUnicast,
+	// men eksplicit for klarhed)
+	if ip4 := ip.To4(); ip4 != nil {
+		if ip4[0] == 169 && ip4[1] == 254 {
+			return true
+		}
+	}
+	return false
+}
+
+// ssrfBlocked laver en hurtig check inden forbindelsen oprettes — afviser
+// literale private IP-adresser og kendte loopback-navne uden DNS-opslag.
 func ssrfBlocked(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -25,43 +45,44 @@ func ssrfBlocked(rawURL string) bool {
 		return true
 	}
 	ip := net.ParseIP(host)
-	if ip == nil {
-		// Forsøg DNS-opslag for at tjekke om hostnavnet resolver til privat IP.
-		// Afvis kun hvis opslaget fejler med en tydelig privat range — ellers lad
-		// http.Client håndtere fejlen naturligt.
-		addrs, err := net.LookupHost(host)
-		if err != nil {
-			return false
-		}
-		if len(addrs) == 0 {
-			return false
-		}
-		ip = net.ParseIP(addrs[0])
-		if ip == nil {
-			return false
-		}
-	}
-	privateRanges := []string{
-		"127.", "::1",
-		"10.", "192.168.",
-		"169.254.", // cloud metadata (AWS/GCP/Azure)
-		"[fc", "[fd", // IPv6 ULA
-	}
-	s := ip.String()
-	for _, prefix := range privateRanges {
-		if strings.HasPrefix(s, prefix) {
-			return true
-		}
-	}
-	// 172.16.0.0/12
-	if strings.HasPrefix(s, "172.") {
-		var a, b int
-		fmt.Sscanf(s, "172.%d.%d", &a, &b)
-		if a >= 16 && a <= 31 {
-			return true
-		}
+	if ip != nil {
+		return isPrivateIP(ip)
 	}
 	return false
+}
+
+// newSafeHTTPClient returnerer en http.Client med en DialContext-hook der
+// resolver DNS og validerer den opnåede IP inden forbindelsen etableres.
+// Dette eliminerer SSRF TOCTOU-vinduet: DNS resolver kun ét sted.
+func newSafeHTTPClient() *http.Client {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			// Resolver DNS eksplicit — vi kontrollerer hvilken IP der forbindes til.
+			addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+			if err != nil {
+				return nil, err
+			}
+			for _, a := range addrs {
+				ip := net.ParseIP(a)
+				if ip != nil && isPrivateIP(ip) {
+					return nil, fmt.Errorf("SSRF-beskyttelse: %s resolver til privat adresse %s", host, a)
+				}
+			}
+			if len(addrs) == 0 {
+				return nil, fmt.Errorf("DNS-opslag gav ingen resultater for %s", host)
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(addrs[0], port))
+		},
+	}
+	return &http.Client{
+		Timeout:   20 * time.Second,
+		Transport: transport,
+	}
 }
 
 // FetchURL henter indhold fra en URL og returnerer ren tekst.
@@ -71,7 +92,7 @@ func FetchURL(rawURL string) (string, error) {
 	if ssrfBlocked(rawURL) {
 		return "", fmt.Errorf("URL afvist: peger på privat eller intern adresse (%s)", rawURL)
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := newSafeHTTPClient()
 	resp, err := client.Get(rawURL)
 	if err != nil {
 		return "", err

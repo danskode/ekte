@@ -83,7 +83,7 @@ type Config struct {
 }
 
 // UpdateProviderConfig opdaterer provider, model og base_url i en config-fil.
-// Alle øvrige felter bevares. api_key slettes aktivt hvis til stede.
+// Alle øvrige felter (inkl. api_key) bevares uændret.
 func UpdateProviderConfig(path, prov, model, baseURL string) error {
 	raw := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil {
@@ -96,7 +96,7 @@ func UpdateProviderConfig(path, prov, model, baseURL string) error {
 	} else {
 		delete(raw, "base_url")
 	}
-	delete(raw, "api_key")
+	// api_key bevares bevidst — wizard ændrer kun provider/model/url
 	data, err := yaml.Marshal(raw)
 	if err != nil {
 		return err

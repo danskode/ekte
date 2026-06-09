@@ -1526,7 +1526,7 @@ func (a *Agent) savePlanFile(content string) (string, error) {
 	}
 	slug := time.Now().Format("20060102-150405")
 	path := filepath.Join(planDir, slug+".md")
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(sanitizeFileContent(content)), 0644); err != nil {
 		return "", err
 	}
 	a.planFile = path
