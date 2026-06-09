@@ -31,14 +31,17 @@ func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
 				},
 			},
 			provider.ToolDefinition{
-				Name:        "search_files",
-				Description: "Søg efter filer der matcher et mønster eller indeholder en streng.",
+				Name: "search_files",
+				Description: "Søg rekursivt efter filer der matcher et mønster eller indeholder en streng. " +
+					"Brug '*.go' for filtype (søger i hele projektet inkl. .ekte/), " +
+					"'**/*.go' virker identisk. Brug delvis sti som 'internal/foo' for sti-søgning. " +
+					"Brug list_dir for at se indholdet af én konkret mappe.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"pattern": map[string]any{
 							"type":        "string",
-							"description": "Glob-mønster (fx '**/*.go') eller tekststreng at søge efter i filnavne",
+							"description": "Glob-mønster ('*.md', '*.go') eller tekststreng ('main', 'internal/agent') at søge efter i filstier",
 						},
 						"contains": map[string]any{
 							"type":        "string",
@@ -46,6 +49,20 @@ func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
 						},
 					},
 					"required": []string{"pattern"},
+				},
+			},
+			provider.ToolDefinition{
+				Name:        "list_dir",
+				Description: "List indholdet af en mappe ét niveau dybere — viser filer og undermapper. Brug '.' for projektmappen.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{
+							"type":        "string",
+							"description": "Mappesti relativ til projektmappen ('.' = rod, '.ekte/skills' = skills-mappe)",
+						},
+					},
+					"required": []string{"path"},
 				},
 			},
 		)
@@ -138,6 +155,12 @@ func Execute(call provider.ToolCall, root string, canRead, canWrite bool) (strin
 			return "", fmt.Errorf("file_read er ikke tilladt i whitelist")
 		}
 		return searchFiles(args, root)
+
+	case "list_dir":
+		if !canRead {
+			return "", fmt.Errorf("file_read er ikke tilladt i whitelist")
+		}
+		return listDir(args, root)
 
 	case "write_file":
 		if !canWrite {
@@ -254,22 +277,35 @@ func searchFiles(args map[string]any, root string) (string, error) {
 		if err != nil {
 			return nil
 		}
-		// Spring .ekte/ og .git/ over
-		if d.IsDir() && (d.Name() == ".ekte" || d.Name() == ".git" || d.Name() == "vendor") {
+		// Spring .git/, vendor/ og node_modules/ over — men ikke .ekte/ (agenten skal
+		// kunne finde filer den selv opretter der, fx skills og memory).
+		if d.IsDir() && (d.Name() == ".git" || d.Name() == "vendor" || d.Name() == "node_modules") {
 			return filepath.SkipDir
 		}
 		if d.IsDir() {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
-		matched, _ := filepath.Match(pattern, d.Name())
-		// Prøv også med fuld relativ sti for glob-mønstre med /
-		if !matched && strings.Contains(pattern, "/") {
-			matched, _ = filepath.Match(pattern, rel)
+
+		// Normalisér **-mønstre: Go's filepath.Match forstår ikke rekursive **.
+		// "**/*.go" → match *.go mod filnavnet; "**" alene → match alt.
+		effectivePattern := pattern
+		if strings.Contains(pattern, "**") {
+			if idx := strings.LastIndex(pattern, "**/"); idx >= 0 {
+				effectivePattern = pattern[idx+3:]
+			} else {
+				effectivePattern = "*"
+			}
 		}
-		// Simpel substring-match på filnavn hvis ingen glob-match
-		if !matched && !strings.Contains(pattern, "*") {
-			matched = strings.Contains(rel, pattern)
+
+		matched, _ := filepath.Match(effectivePattern, d.Name())
+		// Prøv også med fuld relativ sti for glob-mønstre med /
+		if !matched && strings.Contains(effectivePattern, "/") {
+			matched, _ = filepath.Match(effectivePattern, rel)
+		}
+		// Simpel substring-match på fil/sti hvis ingen glob-match
+		if !matched && !strings.Contains(effectivePattern, "*") {
+			matched = strings.Contains(rel, effectivePattern)
 		}
 		if !matched {
 			return nil
@@ -324,6 +360,38 @@ func searchFiles(args map[string]any, root string) (string, error) {
 		return "Ingen filer fundet.", nil
 	}
 	return strings.Join(matches, "\n"), nil
+}
+
+func listDir(args map[string]any, root string) (string, error) {
+	path, _ := args["path"].(string)
+	if path == "" {
+		path = "."
+	}
+	abs, err := safePath(root, path)
+	if err != nil {
+		return "", err
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		return "", fmt.Errorf("kan ikke læse mappe %s: %w", path, err)
+	}
+	if len(entries) == 0 {
+		return fmt.Sprintf("%s/ (tom)", path), nil
+	}
+	var lines []string
+	for _, e := range entries {
+		if e.IsDir() {
+			lines = append(lines, e.Name()+"/")
+		} else {
+			info, err := e.Info()
+			if err == nil {
+				lines = append(lines, fmt.Sprintf("%s  (%d bytes)", e.Name(), info.Size()))
+			} else {
+				lines = append(lines, e.Name())
+			}
+		}
+	}
+	return fmt.Sprintf("%s/\n%s", path, strings.Join(lines, "\n")), nil
 }
 
 func writeFile(args map[string]any, root string) (string, error) {

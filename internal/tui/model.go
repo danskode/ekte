@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/danskode/ekte/internal/agent"
 	"github.com/danskode/ekte/internal/provider"
 )
@@ -20,7 +21,9 @@ const (
 	defaultMaxTokens = 200000
 	warnThreshold    = 0.75
 	critThreshold    = 0.90
-	toolPanelWidth   = 40
+	toolPanelMinWidth = 36
+	toolPanelMaxWidth = 72
+	toolPanelRatio    = 0.38 // 38% af terminalbredden
 )
 
 
@@ -212,10 +215,21 @@ func (m *Model) SetWelcome(projectName string) {
 	m.messages = append(m.messages, provider.Message{Role: "assistant", Content: welcome})
 }
 
+func (m Model) toolPanelWidth() int {
+	w := int(float64(m.width) * toolPanelRatio)
+	if w < toolPanelMinWidth {
+		w = toolPanelMinWidth
+	}
+	if w > toolPanelMaxWidth {
+		w = toolPanelMaxWidth
+	}
+	return w
+}
+
 func (m Model) conversationWidth() int {
 	w := m.width - 4 // 2 til border + 2 padding
 	if m.toolOutput != "" {
-		w = m.width - toolPanelWidth - 1 - 4
+		w = m.width - m.toolPanelWidth() - 1 - 4
 	}
 	if w <= 0 {
 		w = 80
@@ -299,6 +313,8 @@ func (m Model) thinkingLine() string {
 }
 
 // wordWrap bryder lange linjer ved whitespace uden at ødelægge eksisterende linjeskift.
+// wordWrap bryder linjer ved word boundaries. Bruger ansi.StringWidth for at
+// ignorere ANSI escape-sekvenser (farver, OSC 8 hyperlinks) i breddeberegningen.
 func wordWrap(s string, width int) string {
 	if width <= 0 {
 		return s
@@ -308,13 +324,13 @@ func wordWrap(s string, width int) string {
 		if i > 0 {
 			out.WriteByte('\n')
 		}
-		if len(line) <= width {
+		if ansi.StringWidth(line) <= width {
 			out.WriteString(line)
 			continue
 		}
 		col := 0
 		for j, word := range strings.Fields(line) {
-			wl := len(word)
+			wl := ansi.StringWidth(word)
 			if j == 0 {
 				out.WriteString(word)
 				col = wl
@@ -418,14 +434,15 @@ func (m Model) View() string {
 
 	var convView, toolView string
 	if showTool {
-		convW := m.width - toolPanelWidth - 1
+		tpw := m.toolPanelWidth()
+		convW := m.width - tpw - 1
 		m.conversation.Width = convW - 2
 		m.conversation.Height = panelH - 2
 		convView = styleBorder.Width(convW - 2).Height(panelH - 2).Render(m.conversation.View())
-		m.toolPanel.Width = toolPanelWidth - 2
+		m.toolPanel.Width = tpw - 2
 		m.toolPanel.Height = panelH - 2
 		hint := styleSystem.Render("PgUp/PgDn: scroll · Esc: luk")
-		toolView = styleBorder.Width(toolPanelWidth - 2).Height(panelH - 2).
+		toolView = styleBorder.Width(tpw - 2).Height(panelH - 2).
 			BorderTopForeground(colorSubtle).
 			Render(m.toolPanel.View() + "\n\n" + hint)
 	} else {
@@ -524,6 +541,61 @@ func (m Model) renderQueue() string {
 	}
 	return "  " + dimStyle.Render("⏳ i kø: "+strings.Join(items, "  ·  ")) +
 		"  " + hintStyle.Render("(afvikles automatisk)")
+}
+
+func (m *Model) handleQueueCmd(arg string) tea.Cmd {
+	parts := strings.Fields(arg)
+	subCmd := ""
+	if len(parts) > 0 {
+		subCmd = strings.ToLower(parts[0])
+	}
+
+	switch subCmd {
+	case "":
+		// Vis kø
+		if len(m.promptQueue) == 0 {
+			m.appendSystem("Ingen prompts i kø.")
+			return nil
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Prompt-kø (%d):\n\n", len(m.promptQueue)))
+		for i, q := range m.promptQueue {
+			preview := strings.ReplaceAll(q, "\n", " ")
+			sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, preview))
+		}
+		sb.WriteString("\n/kø slet <n> fjerner en prompt — /kø ryd fjerner alle")
+		m.appendSystem(sb.String())
+		return nil
+
+	case "slet":
+		if len(parts) < 2 {
+			m.appendSystem("Brug: /kø slet <nummer>  — fx /kø slet 1")
+			return nil
+		}
+		n := 0
+		if _, err := fmt.Sscanf(parts[1], "%d", &n); err != nil || n < 1 || n > len(m.promptQueue) {
+			m.appendSystem(fmt.Sprintf("Ugyldigt nummer — køen har %d prompt(s).", len(m.promptQueue)))
+			return nil
+		}
+		removed := m.promptQueue[n-1]
+		m.promptQueue = append(m.promptQueue[:n-1], m.promptQueue[n:]...)
+		preview := strings.ReplaceAll(removed, "\n", " ")
+		if len(preview) > 60 {
+			preview = preview[:60] + "…"
+		}
+		m.appendSystem(fmt.Sprintf("✓ Fjernet fra kø: %q", preview))
+		return nil
+
+	case "ryd":
+		count := len(m.promptQueue)
+		m.promptQueue = nil
+		m.appendSystem(fmt.Sprintf("✓ Kø ryddet (%d prompt(s) fjernet).", count))
+		return nil
+
+	default:
+		m.appendSystem("Ukendt kø-kommando.\n  /kø          — vis kø\n  /kø slet <n> — fjern prompt\n  /kø ryd      — ryd alle")
+		return nil
+	}
 }
 
 func (m *Model) appendSystem(content string) {

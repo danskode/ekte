@@ -22,6 +22,8 @@ type WhitelistConfig struct {
 	HookContainer bool `yaml:"hook_container"` // /hook med container-isolation (kræver desuden hook_run)
 	FileRead      bool `yaml:"file_read"`      // LLM må læse filer
 	FileWrite     bool `yaml:"file_write"`     // LLM må skrive/oprette filer
+	AutoApprove   bool `yaml:"auto_approve"`   // spring bekræftelse over for skriveoperationer (filer forbliver inden for projektmappen)
+	HarnessWrite  bool `yaml:"harness_write"`  // tillad agenten at foreslå ændringer til harness-filer (kræver stadig eksplicit bekræftelse per operation)
 }
 
 // ContainerSpec beskriver hvordan en hook køres i en isoleret container.
@@ -78,6 +80,62 @@ type Config struct {
 	Hooks       map[string]HookConfig `yaml:"hooks,omitempty"`
 	Containers  ContainerConfig       `yaml:"containers,omitempty"`
 	Goal        GoalConfig            `yaml:"goal,omitempty"`
+}
+
+// UpdateProviderConfig opdaterer provider, model og base_url i en config-fil.
+// Alle øvrige felter bevares. api_key slettes aktivt hvis til stede.
+func UpdateProviderConfig(path, prov, model, baseURL string) error {
+	raw := map[string]any{}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = yaml.Unmarshal(data, &raw)
+	}
+	raw["provider"] = prov
+	raw["model"] = model
+	if baseURL != "" {
+		raw["base_url"] = baseURL
+	} else {
+		delete(raw, "base_url")
+	}
+	delete(raw, "api_key")
+	data, err := yaml.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
+}
+
+// UpdateContextSize opdaterer context_size i config-fil. size=0 sletter nøglen.
+func UpdateContextSize(path string, size int) error {
+	raw := map[string]any{}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = yaml.Unmarshal(data, &raw)
+	}
+	if size > 0 {
+		raw["context_size"] = size
+	} else {
+		delete(raw, "context_size")
+	}
+	data, err := yaml.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
+}
+
+// ValidateModelName tjekker at modelnavnet er syntaktisk gyldigt.
+func ValidateModelName(name string) error {
+	if name == "" {
+		return fmt.Errorf("modelnavn må ikke være tomt")
+	}
+	if len(name) > 100 {
+		return fmt.Errorf("modelnavn for langt (maks 100 tegn)")
+	}
+	for _, r := range name {
+		if r < 32 || r == 127 {
+			return fmt.Errorf("modelnavn indeholder ugyldigt tegn")
+		}
+	}
+	return nil
 }
 
 // KeyInFile returnerer true hvis api_key er sat direkte i config-filen.
@@ -163,6 +221,8 @@ func MergeConfigs(global, local *Config) *Config {
 	if local.Hooks != nil {
 		merged.Hooks = local.Hooks
 	}
+	merged.Containers = local.Containers
+	merged.Goal = local.Goal
 	return &merged
 }
 

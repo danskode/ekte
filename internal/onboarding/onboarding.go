@@ -82,10 +82,10 @@ func Run(dir string) (Result, error) {
 
 	// 5. Wiki
 	fmt.Println()
-	fmt.Println("Wiki — Simple Minded")
-	fmt.Println("────────────────────")
-	fmt.Println("En personlig wiki samler din viden på tværs af projekter.")
-	fmt.Println("Agenterne trækker automatisk på wikien når den er relevant.")
+	fmt.Println("simple-minded — lokalt videnslager")
+	fmt.Println("──────────────────────────────────")
+	fmt.Println("simple-minded samler din viden på tværs af projekter.")
+	fmt.Println("Tilgå den manuelt med /wiki — aldrig automatisk injiceret.")
 	if ask(r, "Vil du sætte en wiki op?") {
 		wikiPath := runWikiSetup(r, dir)
 		if wikiPath != "" {
@@ -245,21 +245,21 @@ func runLLMSetup(r *bufio.Reader, configPath string) error {
 }
 
 func runWikiSetup(r *bufio.Reader, dir string) string {
-	scope := promptChoice(r, "Skal wikien være global eller lokal?", []string{
+	scope := promptChoice(r, "Skal simple-minded være lokal (ekte-starter) eller global?", []string{
+		"Lokal — i dette projekt (./wiki — anbefalet med ekte-starter)",
 		"Global — delt på tværs af projekter (~/.ekte/wiki)",
-		"Lokal — kun dette projekt (.ekte/wiki)",
 	})
 
 	var wikiPath string
-	if strings.HasPrefix(scope, "Lokal") {
-		wikiPath = filepath.Join(dir, ".ekte", "wiki")
-	} else {
+	if strings.HasPrefix(scope, "Global") {
 		home, _ := os.UserHomeDir()
 		wikiPath = filepath.Join(home, ".ekte", "wiki")
+	} else {
+		wikiPath = filepath.Join(dir, "wiki")
 	}
 
 	if _, err := os.Stat(wikiPath); err == nil {
-		fmt.Printf("   ✓ Eksisterende wiki fundet: %s\n", wikiPath)
+		fmt.Printf("   ✓ Eksisterende simple-minded fundet: %s\n", wikiPath)
 		return wikiPath
 	}
 

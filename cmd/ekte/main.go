@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"time"
 
 	"github.com/danskode/ekte/internal/agent"
 	"github.com/danskode/ekte/internal/ektelog"
@@ -28,11 +29,16 @@ func main() {
 		runInit()
 		return
 	}
+	autoApprove := false
 	sessionArg := ""
-	if len(os.Args) > 1 {
-		sessionArg = os.Args[1]
+	for _, arg := range os.Args[1:] {
+		if arg == "-y" || arg == "--yes" {
+			autoApprove = true
+		} else if sessionArg == "" {
+			sessionArg = arg
+		}
 	}
-	runTUI(sessionArg)
+	runTUI(sessionArg, autoApprove)
 }
 
 func globalEkteDir() string {
@@ -40,7 +46,7 @@ func globalEkteDir() string {
 	return filepath.Join(home, ".ekte")
 }
 
-func runTUI(sessionArg string) {
+func runTUI(sessionArg string, autoApprove bool) {
 	cwd, _ := os.Getwd()
 	globalDir := globalEkteDir()
 
@@ -89,7 +95,8 @@ func runTUI(sessionArg string) {
 		wikiInst, _ = wiki.New(wCfg)
 	}
 
-	skills, skillErrs := skill.LoadAll(skillsDir)
+	globalSkillsDir := filepath.Join(globalDir, "skills")
+	skills, skillErrs := skill.LoadAllFromDirs(globalSkillsDir, skillsDir)
 	for _, e := range skillErrs {
 		fmt.Fprintf(os.Stderr, "skill advarsel: %v\n", e)
 	}
@@ -108,6 +115,9 @@ func runTUI(sessionArg string) {
 		hooks = cfg.Hooks
 		containers = cfg.Containers
 		goal = cfg.Goal
+	}
+	if autoApprove {
+		whitelist.AutoApprove = true
 	}
 
 	// Brug lokal session-mappe hvis .ekte/ eksisterer, ellers global fallback
@@ -137,9 +147,11 @@ func runTUI(sessionArg string) {
 
 	providerName := ""
 	modelName := ""
+	baseURL := ""
 	if cfg != nil {
 		providerName = cfg.Provider
 		modelName = cfg.Model
+		baseURL = cfg.BaseURL
 	}
 
 	contextSize := 0
@@ -147,24 +159,44 @@ func runTUI(sessionArg string) {
 		contextSize = cfg.ContextSize
 	}
 
+	memory := loadMemory(globalDir, cwd)
+
 	a := agent.New(agent.Config{
-		Provider:      p,
-		Skills:        skills,
-		Wiki:          wikiInst,
-		RepoRoot:      repoRoot,
-		WorkDir:       cwd,
-		SessionDir:    sessionDir,
-		Whitelist:     whitelist,
-		Hooks:         hooks,
-		Containers:    containers,
-		Goal:          goal,
-		Obs:           recorder,
-		Log:           logger,
-		ResumeSession: resumeSession,
-		AgentName:     profile.AgentName,
-		ContextSize:   contextSize,
-		ProviderName:  providerName,
-		ModelName:     modelName,
+		Provider:         p,
+		Skills:           skills,
+		Wiki:             wikiInst,
+		RepoRoot:         repoRoot,
+		WorkDir:          cwd,
+		SessionDir:       sessionDir,
+		Whitelist:        whitelist,
+		Hooks:            hooks,
+		Containers:       containers,
+		Goal:             goal,
+		Obs:              recorder,
+		Log:              logger,
+		ResumeSession:    resumeSession,
+		AgentName:        profile.AgentName,
+		ContextSize:      contextSize,
+		ProviderName:     providerName,
+		ModelName:        modelName,
+		BaseURL:          baseURL,
+		Memory:           memory,
+		WorkDirForMemory: cwd,
+		GlobalConfigPath: globalConfigPath,
+		LocalConfigPath:  localConfigPath,
+		OnProviderReload: func() (provider.Provider, string, string, int, string, error) {
+			newGlobal, _ := provider.LoadConfig(globalConfigPath)
+			newLocal, _ := provider.LoadConfig(localConfigPath)
+			newCfg := provider.MergeConfigs(newGlobal, newLocal)
+			if newCfg == nil {
+				return nil, "", "", 0, "", fmt.Errorf("ingen config fundet")
+			}
+			newProv, err := provider.NewFromConfig(newCfg)
+			if err != nil {
+				return nil, "", "", 0, "", err
+			}
+			return newProv, newCfg.Provider, newCfg.Model, newCfg.ContextSize, newCfg.BaseURL, nil
+		},
 	})
 
 	m := tui.New(a)
@@ -398,6 +430,82 @@ func loadEkteMd(dir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// loadMemory læser hukommelsesfiler fra global (~/.ekte/memory/) og
+// projekt-lokal (.ekte/memory/) mappe og returnerer dem som system-beskeder.
+// Global læses først (lavere prioritet), lokal herefter (højere prioritet).
+// Indhold saniteres mod prompt injection inden injection.
+func loadMemory(globalDir, workDir string) []provider.Message {
+	var msgs []provider.Message
+
+	dirs := []struct {
+		path  string
+		label string
+	}{
+		{filepath.Join(globalDir, "memory"), "global"},
+		{filepath.Join(workDir, ".ekte", "memory"), "lokal"},
+	}
+
+	for _, d := range dirs {
+		entries, err := os.ReadDir(d.path)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(d.path, entry.Name()))
+			if err != nil {
+				continue
+			}
+			content := strings.TrimSpace(string(data))
+			if content == "" {
+				continue
+			}
+			// Fjern YAML frontmatter (--- ... ---) inden sanitering
+			cleaned := stripFrontmatter(content)
+			sanitized := sanitizeMemoryContent(cleaned)
+			if sanitized == "" {
+				continue
+			}
+			msgs = append(msgs, provider.Message{
+				Role:    "system",
+				Content: "[Hukommelse — " + d.label + "/" + entry.Name() + "]\n" + sanitized,
+			})
+		}
+	}
+	return msgs
+}
+
+// stripFrontmatter fjerner YAML frontmatter (--- ... ---) fra en markdown-fil.
+func stripFrontmatter(content string) string {
+	if !strings.HasPrefix(content, "---") {
+		return content
+	}
+	rest := strings.TrimPrefix(content, "---")
+	idx := strings.Index(rest, "\n---")
+	if idx < 0 {
+		return content
+	}
+	return strings.TrimSpace(rest[idx+4:])
+}
+
+// sanitizeMemoryContent er en let version af agent.sanitizeFileContent til brug
+// i main-pakken — fjerner de mest åbenlyse prompt injection-mønstre.
+func sanitizeMemoryContent(content string) string {
+	lines := strings.Split(content, "\n")
+	var out []string
+	injectionRe := regexp.MustCompile(`(?i)(ignore (previous|all|above|prior)|new (task|instructions?|prompt|role)|you are now|disregard|system prompt|<\s*(system|instruction|prompt)\s*>)`)
+	for _, line := range lines {
+		if injectionRe.MatchString(line) {
+			out = append(out, "[linje fjernet: mulig injection]")
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 func runInit() {

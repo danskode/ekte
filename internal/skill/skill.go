@@ -54,6 +54,34 @@ func LoadAll(dir string) ([]Skill, []error) {
 	return skills, errs
 }
 
+// LoadAllFromDirs loader skills fra flere mapper og deduplicerer på navn.
+// Første mappe har lavest prioritet, sidst har højest (lokal overskriver global).
+func LoadAllFromDirs(dirs ...string) ([]Skill, []error) {
+	seen := make(map[string]bool)
+	var allSkills []Skill
+	var allErrs []error
+
+	for _, dir := range dirs {
+		skills, errs := LoadAll(dir)
+		allErrs = append(allErrs, errs...)
+		for _, s := range skills {
+			if seen[s.Name] {
+				// Erstat med den lokale version
+				for i, existing := range allSkills {
+					if existing.Name == s.Name {
+						allSkills[i] = s
+						break
+					}
+				}
+			} else {
+				seen[s.Name] = true
+				allSkills = append(allSkills, s)
+			}
+		}
+	}
+	return allSkills, allErrs
+}
+
 func load(path string) (*Skill, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

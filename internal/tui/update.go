@@ -113,7 +113,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		if !m.ready {
 			m.conversation = viewport.New(msg.Width-4, msg.Height-10)
-			m.toolPanel = viewport.New(toolPanelWidth-4, msg.Height-10)
+			m.toolPanel = viewport.New(m.toolPanelWidth()-4, msg.Height-10)
 			m.input.SetWidth(msg.Width - 4)
 			m.ready = true
 			m.conversation.SetContent(m.conversationContent())
@@ -122,6 +122,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.conversation.Width = msg.Width - 4
 			m.conversation.Height = msg.Height - 10
+			m.toolPanel.Width = m.toolPanelWidth() - 2
+			m.toolPanel.Height = msg.Height - 10
+			if m.toolOutput != "" {
+				m.toolPanel.SetContent(wordWrap(m.toolOutput, m.toolPanelWidth()-4))
+			}
 			m.input.SetWidth(msg.Width - 4)
 			return m, initMdCmd(msg.Width - 6)
 		}
@@ -333,6 +338,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if val == "" {
 				return m, nil
 			}
+			// /kø-kommandoer håndteres lokalt i TUI — køen lever i model, ikke agenten
+			if val == "/kø" || strings.HasPrefix(val, "/kø ") {
+				m.input.Reset()
+				m.historyIdx = -1
+				m.savedDraft = ""
+				arg := strings.TrimSpace(strings.TrimPrefix(val, "/kø"))
+				m.conversation.SetContent(m.conversationContent())
+				m.conversation.GotoBottom()
+				return m, m.handleQueueCmd(arg)
+			}
 			if strings.HasPrefix(val, "/forresten") {
 				m.input.Reset()
 				m.historyIdx = -1
@@ -413,7 +428,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// automatisk af tool-output, hvis/når modellen begynder at kalde tools.
 			m.reasoningBuf += msg.Content
 			m.toolOutput = "🧠 " + m.reasoningBuf
-			m.toolPanel.SetContent(m.toolOutput)
+			m.toolPanel.SetContent(wordWrap(m.toolOutput, m.toolPanelWidth()-4))
 			m.toolPanel.GotoBottom()
 			return m, readStreamCmd(m.streamCh)
 
@@ -504,7 +519,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case agent.EventToolOutput:
 			m.streamBuf = ""
 			m.toolOutput = msg.Content
-			m.toolPanel.SetContent(msg.Content)
+			m.toolPanel.SetContent(wordWrap(msg.Content, m.toolPanelWidth()-4))
 
 		case agent.EventQuit:
 			return m, tea.Quit
