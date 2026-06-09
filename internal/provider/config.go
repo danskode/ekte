@@ -123,6 +123,7 @@ func UpdateContextSize(path string, size int) error {
 }
 
 // ValidateModelName tjekker at modelnavnet er syntaktisk gyldigt.
+// Tillader kun tegn der forekommer i kendte model-id'er (Anthropic, OpenAI, Ollama).
 func ValidateModelName(name string) error {
 	if name == "" {
 		return fmt.Errorf("modelnavn må ikke være tomt")
@@ -131,8 +132,9 @@ func ValidateModelName(name string) error {
 		return fmt.Errorf("modelnavn for langt (maks 100 tegn)")
 	}
 	for _, r := range name {
-		if r < 32 || r == 127 {
-			return fmt.Errorf("modelnavn indeholder ugyldigt tegn")
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '.' || r == '_' || r == ':' || r == '-' || r == '/') {
+			return fmt.Errorf("modelnavn indeholder ugyldigt tegn %q (kun a-z A-Z 0-9 . _ : - / tilladt)", r)
 		}
 	}
 	return nil

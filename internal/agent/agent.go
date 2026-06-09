@@ -791,6 +791,12 @@ streamAttempts:
 			if (isHarnessFile || (!a.cfg.Whitelist.AutoApprove)) && (tc.Name == "write_file" || tc.Name == "edit_file" || tc.Name == "create_dir") {
 				a.log().Info("tool confirm", "tool", tc.Name, "path", logSafePath(tc.Input))
 				desc := toolConfirmDesc(tc)
+				// Hvis config.yaml ændres og indholdet berører hooks-sektionen, vis de
+				// konkrete shell-kommandoer eksplicit — brugeren skal se hvad der vil
+				// blive eksekveret ved næste /hook-kald (CWE-78 shell injection).
+				if isHarnessFile {
+					desc = appendHookWarning(desc, tc)
+				}
 				confirmCh := make(chan ConfirmResponse, 1)
 				ch <- Event{Type: EventToolConfirm, Content: desc, ConfirmCh: confirmCh}
 				var resp ConfirmResponse
@@ -1103,6 +1109,40 @@ func sanitizeFileContent(content string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// appendHookWarning tilføjer en advarsel til bekræftelsesbeskeden hvis
+// ændringen berører hooks-sektionen i config.yaml. Brugeren ser de konkrete
+// shell-kommandoer der vil blive eksekverede ved næste /hook-kald.
+func appendHookWarning(desc string, tc provider.ToolCall) string {
+	var args map[string]any
+	if json.Unmarshal(tc.Input, &args) != nil {
+		return desc
+	}
+	// Hent det nye indhold (write_file: "content", edit_file: "new_string")
+	content, _ := args["content"].(string)
+	if content == "" {
+		content, _ = args["new_string"].(string)
+	}
+	if content == "" || !strings.Contains(content, "cmd:") {
+		return desc
+	}
+	// Udtræk linjer der indeholder cmd: og vis dem som advarsel
+	var cmds []string
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "cmd:") {
+			cmd := strings.TrimSpace(strings.TrimPrefix(trimmed, "cmd:"))
+			cmd = strings.Trim(cmd, `"'`)
+			if cmd != "" {
+				cmds = append(cmds, "  $ "+cmd)
+			}
+		}
+	}
+	if len(cmds) == 0 {
+		return desc
+	}
+	return desc + "\n⚠ SHELL-KOMMANDOER der aktiveres:\n" + strings.Join(cmds, "\n")
 }
 
 func toolConfirmDesc(tc provider.ToolCall) string {
@@ -1874,8 +1914,22 @@ func validateBaseURL(raw string) error {
 	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
 		return fmt.Errorf("URL skal starte med http:// eller https://")
 	}
-	if _, err := url.Parse(raw); err != nil {
+	u, err := url.Parse(raw)
+	if err != nil {
 		return fmt.Errorf("ugyldig URL: %w", err)
+	}
+	// Bloker private/loopback-adresser med mindre brugeren eksplicit tillader det.
+	// Legitim LM Studio/Ollama-brug: sæt EKTE_ALLOW_LOCAL_PROVIDER=1.
+	if os.Getenv("EKTE_ALLOW_LOCAL_PROVIDER") == "" {
+		host := u.Hostname()
+		if host == "localhost" || host == "ip6-localhost" {
+			return fmt.Errorf("lokal URL ikke tilladt (sæt EKTE_ALLOW_LOCAL_PROVIDER=1 for LM Studio/Ollama)")
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+				return fmt.Errorf("privat/loopback IP ikke tilladt (sæt EKTE_ALLOW_LOCAL_PROVIDER=1 for lokale modeller)")
+			}
+		}
 	}
 	return nil
 }

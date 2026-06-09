@@ -285,8 +285,10 @@ func searchFiles(args map[string]any, root string) (string, error) {
 			switch d.Name() {
 			case ".git", "vendor", "node_modules":
 				return filepath.SkipDir
-			case "sessions", "hooks":
-				// Spring .ekte/sessions/ og .ekte/hooks/ over, men kun inde i .ekte/
+			case "sessions", "hooks", "memory":
+				// Spring .ekte/sessions/, .ekte/hooks/ og .ekte/memory/ over.
+				// Memory injiceres allerede som system-beskeder ved opstart —
+				// direkte søgeadgang er overflødig og eksponerer private noter.
 				rel2, _ := filepath.Rel(root, path)
 				if strings.HasPrefix(rel2, ".ekte"+string(filepath.Separator)) {
 					return filepath.SkipDir
