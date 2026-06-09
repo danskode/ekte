@@ -175,8 +175,12 @@ func buildArgs(spec Spec, name string) []string {
 		}
 	}
 
+	// Brug --mount-syntaks for at undgå kolon-tvetydighed i stier.
+	// (Windows-stier og visse bind-mounts kan indeholde ':')
+	mountSrc := strings.ReplaceAll(spec.WorkdirHost, ":", "")
+	mountDst := strings.ReplaceAll(spec.WorkdirCtr, ":", "")
 	args = append(args,
-		"-v", spec.WorkdirHost+":"+spec.WorkdirCtr+":rw",
+		"--mount", fmt.Sprintf("type=bind,source=%s,target=%s", mountSrc, mountDst),
 		"-w", spec.WorkdirCtr,
 	)
 

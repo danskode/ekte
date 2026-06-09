@@ -799,6 +799,25 @@ streamAttempts:
 				var hookArgs map[string]any
 				if json.Unmarshal(tc.Input, &hookArgs) == nil {
 					if hookName, ok := hookArgs["name"].(string); ok {
+						// Kræv brugerbekræftelse med mindre auto_approve er aktiveret.
+						// LLM-initierede hooks er shell-eksekvering — bruger skal godkende.
+						if !a.cfg.Whitelist.AutoApprove {
+							hc := a.cfg.Hooks[hookName]
+							confirmCh := make(chan ConfirmResponse, 1)
+							ch <- Event{Type: EventToolConfirm, Content: fmt.Sprintf("run_hook → %s  (%s)", hookName, hc.Cmd), ConfirmCh: confirmCh}
+							var resp ConfirmResponse
+							select {
+							case r := <-confirmCh:
+								resp = r
+							case <-ctx.Done():
+								msgs = append(msgs, provider.Message{Role: "tool", Content: "Afbrudt", ToolCallID: tc.ID})
+								continue
+							}
+							if !resp.Approved {
+								msgs = append(msgs, provider.Message{Role: "tool", Content: "Afvist af bruger", ToolCallID: tc.ID})
+								continue
+							}
+						}
 						result, hookErr := a.runHookForTool(ctx, hookName, ch)
 						if hookErr != nil {
 							msgs = append(msgs, provider.Message{Role: "tool", Content: "Fejl: " + hookErr.Error(), ToolCallID: tc.ID})
@@ -2768,9 +2787,15 @@ func (a *Agent) handleHook(ctx context.Context, name string) []Event {
 	hc, ok := a.cfg.Hooks[name]
 	if !ok {
 		// Fallback: .ekte/hooks/<name> som script.
-		// Afvis navne med path-traversal-tegn inden stikonstruktion.
-		if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") || name == "" {
-			return []Event{{Type: EventSystem, Content: fmt.Sprintf("Ugyldigt hook-navn: %q", name)}}
+		// Strict allowlist — kun alfanumeriske tegn, bindestreg og underscore.
+		// Afviser path-traversal og shell-metategn (mellemrum, semikolon, $, osv.).
+		for _, r := range name {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+				return []Event{{Type: EventSystem, Content: fmt.Sprintf("Ugyldigt hook-navn %q — kun bogstaver, tal, - og _ tilladt", name)}}
+			}
+		}
+		if name == "" {
+			return []Event{{Type: EventSystem, Content: "Hook-navn må ikke være tomt"}}
 		}
 		script := ".ekte/hooks/" + name
 		if _, err := os.Stat(script); err != nil {
