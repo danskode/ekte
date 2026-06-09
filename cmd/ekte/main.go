@@ -492,20 +492,27 @@ func stripFrontmatter(content string) string {
 	return strings.TrimSpace(rest[idx+4:])
 }
 
-// sanitizeMemoryContent er en let version af agent.sanitizeFileContent til brug
-// i main-pakken — fjerner de mest åbenlyse prompt injection-mønstre.
+// memoryInjectionPattern spejler agent.injectionPattern — holdes synkroniseret.
+var memoryInjectionPattern = regexp.MustCompile(`(?i)(` +
+	`ignore\s+(all\s+|the\s+)?(previous|prior|above)|` +
+	`disregard\s+(all\s+|the\s+)?(previous|prior|above)|` +
+	`forget\s+(all\s+|your\s+|the\s+)?(previous|prior|instructions)|` +
+	`new\s+instructions?\s*[:.]|` +
+	`system\s*[:]|<\|?(im_start|im_end|system|assistant|user)\|?>|` +
+	`\[(system|inst)\]|<(human|assistant|system)>|` +
+	`you\s+(are\s+now|must\s+now)|act\s+as\s+(a|an)|` +
+	`reveal\s+(your|the)\s+(prompt|instructions|system)|` +
+	`print\s+your\s+(prompt|instructions|system)` +
+	`)`)
+
 func sanitizeMemoryContent(content string) string {
 	lines := strings.Split(content, "\n")
-	var out []string
-	injectionRe := regexp.MustCompile(`(?i)(ignore (previous|all|above|prior)|new (task|instructions?|prompt|role)|you are now|disregard|system prompt|<\s*(system|instruction|prompt)\s*>)`)
-	for _, line := range lines {
-		if injectionRe.MatchString(line) {
-			out = append(out, "[linje fjernet: mulig injection]")
-			continue
+	for i, line := range lines {
+		if memoryInjectionPattern.MatchString(line) {
+			lines[i] = "[linje fjernet: mulig prompt injection]"
 		}
-		out = append(out, line)
 	}
-	return strings.Join(out, "\n")
+	return strings.Join(lines, "\n")
 }
 
 func runInit() {
