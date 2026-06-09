@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -63,10 +64,31 @@ type Result struct {
 	Truncated bool
 }
 
+// imageNameRe validerer at container image-navne kun indeholder tilladte tegn.
+// Forhindrer shell-injection via image-navn fra config.
+var imageNameRe = regexp.MustCompile(`^[a-zA-Z0-9._/:\-]+$`)
+
+// portSpecRe validerer port-specifikationer på formen "8080:8080".
+var portSpecRe = regexp.MustCompile(`^\d{1,5}:\d{1,5}$`)
+
+// ValidateImage returnerer fejl hvis image-navn indeholder ugyldige tegn.
+func ValidateImage(image string) error {
+	if image == "" {
+		return fmt.Errorf("container image-navn må ikke være tomt")
+	}
+	if !imageNameRe.MatchString(image) {
+		return fmt.Errorf("ugyldigt container image-navn: %q (kun a-z, A-Z, 0-9, ., _, /, :, - tilladt)", image)
+	}
+	return nil
+}
+
 // Run bygger og eksekverer docker/podman run og returnerer resultatet.
 // Output afkortes ved MaxOutput; processen afbrydes ved Timeout og containeren
 // dræbes eksplicit via docker/podman kill for at undgå efterladte processer.
 func Run(ctx context.Context, spec Spec) (Result, error) {
+	if err := ValidateImage(spec.Image); err != nil {
+		return Result{}, err
+	}
 	applyDefaults(&spec)
 
 	name := "ekte-hook-" + uuid.New().String()[:8]
@@ -128,7 +150,9 @@ func buildArgs(spec Spec, name string) []string {
 	args = append(args, "--cpus", spec.CPUs)
 
 	for _, p := range spec.Ports {
-		args = append(args, "-p", p)
+		if portSpecRe.MatchString(p) {
+			args = append(args, "-p", p)
+		}
 	}
 
 	args = append(args,

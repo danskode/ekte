@@ -2767,7 +2767,11 @@ func (a *Agent) handleHookList() []Event {
 func (a *Agent) handleHook(ctx context.Context, name string) []Event {
 	hc, ok := a.cfg.Hooks[name]
 	if !ok {
-		// fallback: .ekte/hooks/<name> som script
+		// Fallback: .ekte/hooks/<name> som script.
+		// Afvis navne med path-traversal-tegn inden stikonstruktion.
+		if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") || name == "" {
+			return []Event{{Type: EventSystem, Content: fmt.Sprintf("Ugyldigt hook-navn: %q", name)}}
+		}
 		script := ".ekte/hooks/" + name
 		if _, err := os.Stat(script); err != nil {
 			return []Event{{Type: EventSystem, Content: fmt.Sprintf("Hook ikke fundet: %s\n\nKør '/hook' for at se tilgængelige hooks.", name)}}
