@@ -361,7 +361,8 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 		a.log().Info("historik trimmet", "messages_før", beforeTrim, "messages_efter", len(msgs))
 	}
 
-	// Injicér wiki som autoritativ kilde — skal altid prioriteres over generel viden
+	// Injicér wiki som autoritativ kilde — skal altid prioriteres over generel viden.
+	// Wiki-indholdet begrænses til maks 40% af contextSize for at undgå overflow.
 	var wikiSource string
 	wikiIdx := -1
 	if a.cfg.Wiki != nil && wiki.HasSubstantiveQuery(input) {
@@ -371,8 +372,24 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 			var paths []string
 			ctxBuilder.WriteString("VIGTIG INSTRUKTION: Følgende wiki-sider er projektets kilde til sandhed.\n")
 			ctxBuilder.WriteString("Kodestandarder, arkitektur og ønsker herfra SKAL følges og prioriteres over generel viden.\n\n")
+			// Injicér kun et uddrag per side (maks 3000 tegn ≈ 750 tokens).
+			// Fuldt indhold vises til brugeren via /wiki — LLM'en får nok til at svare.
+			const maxPageExcerptChars = 3000
 			for _, p := range pages {
-				ctxBuilder.WriteString(fmt.Sprintf("=== %s ===\n%s\n\n", p.Path, p.Content))
+				excerpt := p.Content
+				truncated := false
+				if len(excerpt) > maxPageExcerptChars {
+					excerpt = excerpt[:maxPageExcerptChars]
+					if idx := strings.LastIndex(excerpt, "\n"); idx > maxPageExcerptChars/2 {
+						excerpt = excerpt[:idx]
+					}
+					truncated = true
+				}
+				note := ""
+				if truncated {
+					note = "\n[side afkortet — brug /wiki for fuld version]"
+				}
+				ctxBuilder.WriteString(fmt.Sprintf("=== %s ===\n%s%s\n\n", p.Path, excerpt, note))
 				paths = append(paths, p.Path)
 			}
 			msgs = append([]provider.Message{{Role: "system", Content: ctxBuilder.String()}}, msgs...)
@@ -933,9 +950,17 @@ func fileLink(path, workDir string) string {
 	if !filepath.IsAbs(path) && workDir != "" {
 		abs = filepath.Join(workDir, path)
 	}
+	// Strip kontroltegn fra display-text — forhindrer at LLM-kontrolleret sti
+	// kan injicere nye OSC-sekvenser ved at afslutte det legitime link tidligt.
+	safeDisplay := strings.Map(func(r rune) rune {
+		if r < 0x20 {
+			return -1
+		}
+		return r
+	}, path)
 	// OSC 8: \e]8;;<uri>\a<tekst>\e]8;;\a — URL-encod stien for korrekt unicode/mellemrum.
 	u := &url.URL{Scheme: "file", Path: abs}
-	return "\x1b]8;;" + u.String() + "\x1b\\" + path + "\x1b]8;;\x1b\\"
+	return "\x1b]8;;" + u.String() + "\x1b\\" + safeDisplay + "\x1b]8;;\x1b\\"
 }
 
 func toolActivityLine(tc provider.ToolCall, result string, workDir ...string) string {
@@ -1252,12 +1277,6 @@ func (a *Agent) handleContext() []Event {
 		skillName = a.activeSkill.Name
 	}
 
-	wikiTok := 0
-	if a.cfg.Wiki != nil {
-		// Wiki-kontekst er inkluderet i system-beskeder — estimeret separat
-		wikiTok = 0 // vises kun hvis wiki faktisk er forespurgt denne tur
-	}
-
 	total := sysTok + memTok + histTok + skillTok
 	contextMax := a.cfg.ContextSize
 	pct := ""
@@ -1286,7 +1305,9 @@ func (a *Agent) handleContext() []Event {
 	} else {
 		sb.WriteString(fmt.Sprintf("  %-14s (ingen endnu)\n", "HISTORIK"))
 	}
-	_ = wikiTok
+	if a.cfg.Wiki != nil {
+		sb.WriteString(fmt.Sprintf("  %-14s injiceres automatisk ved relevante prompts (op til 40%% af kontekst)\n", "WIKI"))
+	}
 	sb.WriteString("\n")
 	sb.WriteString(fmt.Sprintf("  Total: ~%d / %s tokens%s\n", total, maxStr, pct))
 	sb.WriteString("\n")
@@ -2431,7 +2452,10 @@ func actualOrEstimate(resp *provider.Response, messages []provider.Message) int 
 }
 
 func estimateTokens(messages []provider.Message) int {
-	total := 0
+	// Fast overhead for system-prompt, tool-definitioner og message-metadata.
+	// len(content)/4 undervurderer systematisk — overhead kompenserer delvist.
+	const overhead = 500
+	total := overhead
 	for _, m := range messages {
 		total += len(m.Content) / 4
 	}
@@ -2759,7 +2783,12 @@ func (a *Agent) handleHook(ctx context.Context, name string) []Event {
 	}
 
 	var buf bytes.Buffer
-	c := exec.Command("sh", "-c", hc.Cmd)
+	c := exec.CommandContext(ctx, "sh", "-c", hc.Cmd)
+	workdir := a.cfg.WorkDir
+	if workdir == "" {
+		workdir, _ = os.Getwd()
+	}
+	c.Dir = workdir
 	c.Stdout = &buf
 	c.Stderr = &buf
 

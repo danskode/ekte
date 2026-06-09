@@ -97,7 +97,7 @@ func New(a *agent.Agent) Model {
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
 
-	return Model{
+	m := Model{
 		agent:         a,
 		input:         ta,
 		spinner:       sp,
@@ -105,6 +105,8 @@ func New(a *agent.Agent) Model {
 		suggestionIdx: -1,
 		maxTokens:     defaultMaxTokens,
 	}
+	m.syncFromAgent() // synkronisér evt. resumed session-historik
+	return m
 }
 
 func (m *Model) SetMaxTokens(n int) {
@@ -273,7 +275,7 @@ func (m Model) conversationContent() string {
 			header := m.msgHeader(styleAssistantLabel.Render("🤖 "+agentName), w)
 			sb.WriteString(header + "\n" + renderMd(msg.Content) + "\n\n")
 		case "system":
-			sb.WriteString(styleSystem.Render("◦ "+wordWrap(msg.Content, w)) + "\n\n")
+			sb.WriteString(styleSystem.Render("◦ "+wordWrap(msg.Content, w-2)) + "\n\n")
 		case "forresten":
 			header := m.msgHeader(styleForrestenLabel.Render("💬 forresten"), w)
 			sb.WriteString(header + "\n" + renderMd(msg.Content) + "\n\n")

@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -82,10 +84,26 @@ func startStreamCmd(a *agent.Agent, input string) tea.Cmd {
 	}
 }
 
-// beepCmd sender et terminal-bell (BEL) til stdout — de fleste terminaler
-// bipper eller blinker på dette uden at det påvirker Bubbletea-renderingen,
-// da BEL ikke er en escape-sekvens der flytter cursor eller tegner noget.
+// beepCmd afspiller en notifikationslyd. Prøver paplay/aplay med freedesktop-lyde
+// og falder tilbage til terminal-bell hvis ingen lydafspiller er tilgængelig.
 func beepCmd() tea.Msg {
+	sounds := []string{
+		"/usr/share/sounds/freedesktop/stereo/message.oga",
+		"/usr/share/sounds/freedesktop/stereo/bell.oga",
+		"/usr/share/sounds/freedesktop/stereo/complete.oga",
+	}
+	for _, s := range sounds {
+		if _, err := os.Stat(s); err != nil {
+			continue
+		}
+		if exec.Command("paplay", s).Run() == nil {
+			return nil
+		}
+		if exec.Command("aplay", s).Run() == nil {
+			return nil
+		}
+		break
+	}
 	fmt.Print("\a")
 	return nil
 }
@@ -566,4 +584,8 @@ func (m *Model) syncFromAgent() {
 		return
 	}
 	m.tokenCount = m.agent.TokenCount()
+	// Ved resume: kopiér agent-messages til TUI hvis TUI endnu er tom.
+	if msgs := m.agent.Messages(); len(msgs) > 0 && len(m.messages) == 0 {
+		m.messages = msgs
+	}
 }
