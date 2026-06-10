@@ -52,6 +52,12 @@ func Run(dir string) (Result, error) {
 		}
 	}
 
+	// 2b. Beskyt private filer mod commit — config.yaml kan indeholde
+	// base_url med privat IP, sessions/ den fulde samtalehistorik.
+	if err := EnsureGitignore(dir); err != nil {
+		fmt.Printf("⚠ Kunne ikke opdatere .gitignore: %v\n", err)
+	}
+
 	// 3. ekte.md
 	var projectName string
 	ekteMdPath := filepath.Join(dir, "ekte.md")
@@ -114,6 +120,52 @@ func Run(dir string) (Result, error) {
 	fmt.Print("Tryk Enter for at starte ekte...")
 	readLine(r)
 	return Result{Ok: true, ProjectName: projectName}, nil
+}
+
+// gitignoreEntries er de .ekte-stier der aldrig bør committes i et
+// brugerprojekt: config.yaml kan indeholde base_url med privat IP,
+// sessions/ rummer fuld samtalehistorik, memory/ private noter.
+var gitignoreEntries = []string{
+	".ekte/config.yaml",
+	".ekte/sessions/",
+	".ekte/memory/",
+	".ekte/worktrees/",
+	".ekte/plans/",
+}
+
+// EnsureGitignore sikrer at projektets .gitignore dækker ekte's private filer.
+// Idempotent: eksisterende indhold bevares, og kun manglende poster tilføjes.
+// Kaldes både ved onboarding og ved opstart i eksisterende projekter.
+func EnsureGitignore(dir string) error {
+	path := filepath.Join(dir, ".gitignore")
+	existing := map[string]bool{}
+	data, err := os.ReadFile(path)
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			existing[strings.TrimSpace(line)] = true
+		}
+	}
+
+	var missing []string
+	for _, e := range gitignoreEntries {
+		if !existing[e] {
+			missing = append(missing, e)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	var sb strings.Builder
+	sb.Write(data)
+	if len(data) > 0 && !strings.HasSuffix(string(data), "\n") {
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n# ekte — private filer (tilføjet automatisk)\n")
+	for _, e := range missing {
+		sb.WriteString(e + "\n")
+	}
+	return os.WriteFile(path, []byte(sb.String()), 0644)
 }
 
 func runPRDGuide(r *bufio.Reader, path string) (string, error) {

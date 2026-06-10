@@ -126,6 +126,16 @@ func runTUI(sessionArg string, autoApprove bool) {
 		repoRoot = root
 	}
 
+	// Sørg for at .ekte's private filer er gitignored — også i projekter
+	// onboardet før denne beskyttelse fandtes. Idempotent.
+	if repoRoot != "" {
+		if _, err := os.Stat(filepath.Join(cwd, ".ekte")); err == nil {
+			if err := onboarding.EnsureGitignore(cwd); err != nil {
+				fmt.Fprintf(os.Stderr, "advarsel: kunne ikke opdatere .gitignore: %v\n", err)
+			}
+		}
+	}
+
 	var whitelist provider.WhitelistConfig
 	var hooks map[string]provider.HookConfig
 	var containers provider.ContainerConfig
