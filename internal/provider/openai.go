@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"os"
 	"sort"
 
 	"github.com/sashabaranov/go-openai"
@@ -38,6 +40,29 @@ func NewOpenAIProvider(cfg *Config) *OpenAIProvider {
 	// helt normale, lange genereringer midt i strømmen.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DisableKeepAlives = true
+	// Tilføj DialContext-hook der validerer resolved IP mod private ranges
+	// for at forhindre DNS rebinding-angreb (CWE-918). Spejler logikken fra
+	// internal/tools/fetch.go — kan ikke genbruges direkte (cirkulær dep).
+	baseDial := tr.DialContext
+	if baseDial == nil {
+		baseDial = (&net.Dialer{}).DialContext
+	}
+	allowLocal := os.Getenv("EKTE_ALLOW_LOCAL_PROVIDER") != ""
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if !allowLocal {
+			host, _, _ := net.SplitHostPort(addr)
+			if ips, err := net.DefaultResolver.LookupHost(ctx, host); err == nil {
+				for _, ipStr := range ips {
+					if ip := net.ParseIP(ipStr); ip != nil {
+						if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+							return nil, fmt.Errorf("provider-URL peger på privat/intern IP %s (sæt EKTE_ALLOW_LOCAL_PROVIDER=1 for lokale modeller)", ipStr)
+						}
+					}
+				}
+			}
+		}
+		return baseDial(ctx, network, addr)
+	}
 	clientCfg.HTTPClient = &http.Client{Transport: tr}
 	return &OpenAIProvider{
 		client: openai.NewClientWithConfig(clientCfg),

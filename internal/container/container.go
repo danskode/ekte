@@ -89,9 +89,9 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	if err := ValidateImage(spec.Image); err != nil {
 		return Result{}, err
 	}
-	// Kommaer, lighedstegn og linjeskift ville bryde --mount type=bind,source=X,target=Y-formatet.
-	if strings.ContainsAny(spec.WorkdirHost, ",=\n") || strings.ContainsAny(spec.WorkdirCtr, ",=\n") {
-		return Result{}, fmt.Errorf("container workdir-stier må ikke indeholde kommaer, lighedstegn eller linjeskift")
+	// Kommaer, lighedstegn, linjeskift og mellemrum ville bryde --mount-formatet.
+	if strings.ContainsAny(spec.WorkdirHost, ",=\n\t ") || strings.ContainsAny(spec.WorkdirCtr, ",=\n\t ") {
+		return Result{}, fmt.Errorf("container workdir-stier må ikke indeholde kommaer, lighedstegn, linjeskift eller mellemrum")
 	}
 	applyDefaults(&spec)
 

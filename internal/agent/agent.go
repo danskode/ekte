@@ -827,9 +827,10 @@ streamAttempts:
 				var hookArgs map[string]any
 				if json.Unmarshal(tc.Input, &hookArgs) == nil {
 					if hookName, ok := hookArgs["name"].(string); ok {
-						// Kræv brugerbekræftelse med mindre auto_approve er aktiveret.
-						// LLM-initierede hooks er shell-eksekvering — bruger skal godkende.
-						if !a.cfg.Whitelist.AutoApprove {
+						// Kræv ALTID brugerbekræftelse for run_hook — uanset auto_approve.
+						// Shell-eksekvering via LLM omgås ikke af AutoApprove (CWE-285/CWE-78),
+						// analogt med harness-fil-invarianten for config.yaml.
+						if true { //nolint:staticcheck
 							hc := a.cfg.Hooks[hookName]
 							confirmCh := make(chan ConfirmResponse, 1)
 							ch <- Event{Type: EventToolConfirm, Content: fmt.Sprintf("run_hook → %s  (%s)", hookName, hc.Cmd), ConfirmCh: confirmCh}
@@ -1101,7 +1102,14 @@ var injectionPattern = regexp.MustCompile(`(?i)(` +
 
 // sanitizeFileContent fjerner linjer der ligner prompt injection-forsøg.
 // Svagt ekstra lag — den reelle beskyttelse er bekræftelsesdialogen på skriveoperationer.
+// Linje-for-linje matching alene fangede ikke sætninger splittet over to linjer;
+// vi matcher nu også på den sammenflettede enkeltlinje-version (CWE-74).
 func sanitizeFileContent(content string) string {
+	// Tjek om hele indholdet indeholder injection når linjeskift erstattes med mellemrum
+	flattened := strings.ReplaceAll(content, "\n", " ")
+	if injectionPattern.MatchString(flattened) {
+		return "[indhold fjernet: mulig prompt injection]"
+	}
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
 		if injectionPattern.MatchString(line) {
@@ -1112,37 +1120,40 @@ func sanitizeFileContent(content string) string {
 }
 
 // appendHookWarning tilføjer en advarsel til bekræftelsesbeskeden hvis
-// ændringen berører hooks-sektionen i config.yaml. Brugeren ser de konkrete
-// shell-kommandoer der vil blive eksekverede ved næste /hook-kald.
+// ændringen berører hooks-sektionen i config.yaml. Viser den rå hooks-sektion
+// fra YAML frem for at parse enkeltlinjer — sikrer at block scalars mv. ses.
 func appendHookWarning(desc string, tc provider.ToolCall) string {
 	var args map[string]any
 	if json.Unmarshal(tc.Input, &args) != nil {
 		return desc
 	}
-	// Hent det nye indhold (write_file: "content", edit_file: "new_string")
 	content, _ := args["content"].(string)
 	if content == "" {
 		content, _ = args["new_string"].(string)
 	}
-	if content == "" || !strings.Contains(content, "cmd:") {
+	if content == "" || !strings.Contains(content, "hooks:") {
 		return desc
 	}
-	// Udtræk linjer der indeholder cmd: og vis dem som advarsel
-	var cmds []string
+	// Udtræk hooks-blokken fra YAML-indholdet og vis den rå —
+	// linje-for-linje cmd:-parsing fanget ikke block scalars (CWE-116).
+	var hooksSection strings.Builder
+	inHooks := false
 	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "cmd:") {
-			cmd := strings.TrimSpace(strings.TrimPrefix(trimmed, "cmd:"))
-			cmd = strings.Trim(cmd, `"'`)
-			if cmd != "" {
-				cmds = append(cmds, "  $ "+cmd)
+		if strings.TrimSpace(line) == "hooks:" || strings.HasPrefix(strings.TrimSpace(line), "hooks:") {
+			inHooks = true
+		}
+		if inHooks {
+			// Stop ved næste top-niveau nøgle (ingen indrykning)
+			if hooksSection.Len() > 0 && len(line) > 0 && line[0] != ' ' && line[0] != '\t' && !strings.HasPrefix(strings.TrimSpace(line), "hooks:") {
+				break
 			}
+			hooksSection.WriteString(line + "\n")
 		}
 	}
-	if len(cmds) == 0 {
+	if hooksSection.Len() == 0 {
 		return desc
 	}
-	return desc + "\n⚠ SHELL-KOMMANDOER der aktiveres:\n" + strings.Join(cmds, "\n")
+	return desc + "\n⚠ HOOKS DER AKTIVERES (shell-kommandoer):\n" + hooksSection.String()
 }
 
 func toolConfirmDesc(tc provider.ToolCall) string {
@@ -1316,7 +1327,9 @@ func (a *Agent) handleRemember(arg string) []Event {
 	}
 	slug := time.Now().Format("20060102-150405")
 	filename := filepath.Join(memDir, slug+".md")
-	content := "---\ntype: memory\ndate: " + time.Now().Format("2006-01-02") + "\n---\n\n" + arg + "\n"
+	// Sanitér inden skrivning så disk-indhold er konsistent med hvad loadMemory injicerer (CWE-20).
+	sanitized := sanitizeFileContent(arg)
+	content := "---\ntype: memory\ndate: " + time.Now().Format("2006-01-02") + "\n---\n\n" + sanitized + "\n"
 	if err := os.WriteFile(filename, []byte(content), 0600); err != nil {
 		return []Event{{Type: EventSystem, Content: "Fejl: kunne ikke gemme note: " + err.Error()}}
 	}

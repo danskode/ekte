@@ -514,6 +514,11 @@ var memoryInjectionPattern = regexp.MustCompile(`(?i)(` +
 func sanitizeMemoryContent(content string) string {
 	// NFKC-normaliser inden regex-match for at fange Unicode-homoglyf-omgåelser.
 	normalized := norm.NFKC.String(content)
+	// Tjek også flattened version for at fange sætninger splittet over linjeskift (CWE-74).
+	flattened := strings.ReplaceAll(normalized, "\n", " ")
+	if memoryInjectionPattern.MatchString(flattened) {
+		return "[indhold fjernet: mulig prompt injection]"
+	}
 	lines := strings.Split(normalized, "\n")
 	for i, line := range lines {
 		if memoryInjectionPattern.MatchString(line) {
