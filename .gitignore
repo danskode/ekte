@@ -36,3 +36,7 @@ TEST/
 # OS
 .DS_Store
 Thumbs.db
+
+# ekte — private filer (tilføjet automatisk)
+.ekte/memory/
+.ekte/plans/
