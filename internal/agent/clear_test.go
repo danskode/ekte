@@ -57,7 +57,7 @@ func TestClearBevarerBaseline(t *testing.T) {
 
 func TestClearAfslutterPlanMode(t *testing.T) {
 	a := New(Config{})
-	a.Process(context.Background(), "/mode plan")
+	a.ToggleWorkMode()
 	if a.WorkMode() != "plan" {
 		t.Fatal("forventede plan mode aktiv")
 	}
@@ -67,17 +67,17 @@ func TestClearAfslutterPlanMode(t *testing.T) {
 	}
 }
 
-func TestWorkModeSkift(t *testing.T) {
+func TestWorkModeToggle(t *testing.T) {
 	a := New(Config{})
 	if a.WorkMode() != "develop" {
 		t.Fatalf("default arbejdsmode burde være develop, fik %s", a.WorkMode())
 	}
 
-	a.Process(context.Background(), "/mode plan")
+	// develop → plan: systemprompten skal injiceres.
+	a.ToggleWorkMode()
 	if a.WorkMode() != "plan" {
-		t.Error("/mode plan aktiverede ikke plan mode")
+		t.Error("ToggleWorkMode aktiverede ikke plan mode")
 	}
-	// Plan-systemprompten skal være injiceret.
 	found := false
 	for _, m := range a.messages {
 		if m.Role == "system" && strings.Contains(m.Content, "PLAN MODE") {
@@ -85,21 +85,34 @@ func TestWorkModeSkift(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("planModeSystemPrompt ikke injiceret ved /mode plan")
+		t.Error("planModeSystemPrompt ikke injiceret ved skift til plan")
 	}
 
-	a.Process(context.Background(), "/mode develop")
+	// plan → develop
+	a.ToggleWorkMode()
 	if a.WorkMode() != "develop" {
-		t.Error("/mode develop forlod ikke plan mode")
+		t.Error("ToggleWorkMode forlod ikke plan mode")
 	}
+}
 
-	// toggle: develop → plan → develop
-	a.Process(context.Background(), "/mode toggle")
+// TestModeRørerIkkeArbejdsmode: /mode styrer kun verbositet (beginner/expert).
+// Arbejdsmode (plan/develop) er en uafhængig akse — man kan være beginner og
+// i plan mode samtidig.
+func TestModeRørerIkkeArbejdsmode(t *testing.T) {
+	a := New(Config{})
+	a.ToggleWorkMode() // plan mode aktiv
+
+	a.Process(context.Background(), "/mode beginner")
 	if a.WorkMode() != "plan" {
-		t.Error("/mode toggle burde skifte til plan")
+		t.Error("/mode beginner må ikke ændre arbejdsmode")
 	}
-	a.Process(context.Background(), "/mode toggle")
-	if a.WorkMode() != "develop" {
-		t.Error("/mode toggle burde skifte tilbage til develop")
+	a.Process(context.Background(), "/mode expert")
+	if a.WorkMode() != "plan" {
+		t.Error("/mode expert må ikke ændre arbejdsmode")
+	}
+	// plan/develop er IKKE gyldige /mode-argumenter længere
+	a.Process(context.Background(), "/mode develop")
+	if a.WorkMode() != "plan" {
+		t.Error("/mode develop burde være ukendt og ikke ændre arbejdsmode")
 	}
 }

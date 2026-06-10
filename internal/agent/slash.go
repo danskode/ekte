@@ -319,42 +319,29 @@ func (a *Agent) handleSecurity() []Event {
 	return []Event{{Type: EventSystem, Content: sb.String()}}
 }
 
+// handleMode styrer KUN verbositet (beginner/expert) — det er én akse.
+// Arbejdsmode (plan/develop) er en uafhængig akse og skiftes med Shift+Tab;
+// man kan fx sagtens være beginner OG i plan mode samtidig.
 func (a *Agent) handleMode(arg string) []Event {
 	switch strings.ToLower(arg) {
-	// Arbejdsmode: plan (Architect of Intent) eller develop (implementering).
-	// Skiftes også med Shift+Tab i TUI'en.
-	case "plan":
-		return a.enterPlanMode()
-	case "develop", "dev", "udvikl":
-		return a.exitPlanMode()
-	case "toggle":
-		if a.planMode {
-			return a.exitPlanMode()
-		}
-		return a.enterPlanMode()
-
-	// Verbositet: beginner (hints) eller expert (stille).
 	case "beginner", "nybegynder":
 		a.cfg.Mode = "beginner"
 		return []Event{{Type: EventSystem, Content: "✓ Tilstand: beginner — wiki-hints og hjælpetekster aktiveret"}}
 	case "expert", "ekspert":
 		a.cfg.Mode = "expert"
 		return []Event{{Type: EventSystem, Content: "✓ Tilstand: expert — stille tilstand, ingen automatiske hints"}}
-
 	case "":
 		verb := a.cfg.Mode
 		if verb == "" {
 			verb = "beginner"
 		}
 		return []Event{{Type: EventSystem, Content: fmt.Sprintf(
-			"Arbejdsmode: %s · verbositet: %s\n\n"+
-				"  /mode plan      — Architect of Intent (ingen kode, kvalificér intent)\n"+
-				"  /mode develop   — implementering\n"+
+			"Tilstand: %s (arbejdsmode: %s)\n\n"+
 				"  /mode beginner  — hints aktiveret\n"+
 				"  /mode expert    — stille tilstand\n\n"+
-				"Shift+Tab skifter mellem plan og develop.", a.WorkMode(), verb)}}
+				"Arbejdsmode (plan/develop) skiftes med Shift+Tab.", verb, a.WorkMode())}}
 	default:
-		return []Event{{Type: EventSystem, Content: "Ukendt tilstand: " + arg + " — vælg plan, develop, beginner eller expert"}}
+		return []Event{{Type: EventSystem, Content: "Ukendt tilstand: " + arg + " — vælg 'beginner' eller 'expert'. Plan/develop skiftes med Shift+Tab."}}
 	}
 }
 
@@ -929,10 +916,8 @@ var builtinCommands = [][2]string{
 	{"/remember <tekst>", "gem en note i hukommelsen (.ekte/memory/)"},
 	{"/context", "vis alle tre lag med token-estimater"},
 	{"/security", "vis sikkerhedsstatus, whitelist og guardrails"},
-	{"/mode plan", "Architect of Intent — kvalificér intent, ingen kode (Shift+Tab)"},
-	{"/mode develop", "implementeringstilstand (Shift+Tab)"},
 	{"/mode beginner", "hints og hjælpetekster aktiveret"},
-	{"/mode expert", "stille tilstand, ingen automatiske hints"},
+	{"/mode expert", "stille tilstand, ingen automatiske hints (plan/develop: Shift+Tab)"},
 	{"/plan <beskrivelse>", "Architect of Intent mode — kvalificér intent inden implementering"},
 	{"/plan godkend", "gem plan og afslut plan mode"},
 	{"/plan vis", "vis aktuel plan-fil"},

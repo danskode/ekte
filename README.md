@@ -225,6 +225,8 @@ Alle kommandoer skrives direkte i input-feltet.
 |---|---|
 | `Enter` | Send besked |
 | `Shift+Enter` | Ny linje i input |
+| `Shift+Tab` | Skift arbejdsmode: plan ↔ develop |
+| `Tab` | Autocomplete af slash-kommandoer — også andet ord (`/mode beg…`, `/sound o…`, `/hook <navn>`) |
 | `↑` / `↓` | Naviger i inputhistorik |
 | `PgUp` / `PgDn` | Scroll i samtalevisning |
 

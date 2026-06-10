@@ -225,8 +225,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Shift+Tab skifter arbejdsmode (plan ↔ develop) — som i Claude Code.
-		if msg.String() == "shift+tab" && !m.pendingConfirm && !m.streaming {
-			return m, startStreamCmd(m.agent, "/mode toggle")
+		// Kaldes direkte på agenten (ikke som slash-kommando): /mode er
+		// reserveret til verbositet (beginner/expert), en uafhængig akse.
+		if msg.String() == "shift+tab" && !m.pendingConfirm && !m.streaming && m.agent != nil {
+			for _, ev := range m.agent.ToggleWorkMode() {
+				if ev.Content != "" {
+					m.appendSystem(ev.Content)
+				}
+			}
+			return m, nil
 		}
 		if msg.String() == "alt+O" {
 			m.pendingShiftEnter = true

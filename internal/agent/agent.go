@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -276,12 +277,31 @@ func (a *Agent) Commands() []string {
 }
 
 // WorkMode returnerer den aktive arbejdstilstand: "plan" eller "develop".
-// Vises i TUI'ens statuslinje og skiftes med Shift+Tab eller /mode.
+// Uafhængig af verbositets-tilstanden (/mode beginner|expert) — vises i
+// TUI'ens statuslinje og skiftes med Shift+Tab (ToggleWorkMode).
 func (a *Agent) WorkMode() string {
 	if a.planMode {
 		return "plan"
 	}
 	return "develop"
+}
+
+// ToggleWorkMode skifter mellem plan og develop — kaldes af TUI'ens Shift+Tab.
+func (a *Agent) ToggleWorkMode() []Event {
+	if a.planMode {
+		return a.exitPlanMode()
+	}
+	return a.enterPlanMode()
+}
+
+// HookNames returnerer de konfigurerede hook-navne sorteret — til autocomplete.
+func (a *Agent) HookNames() []string {
+	var names []string
+	for n := range a.cfg.Hooks {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (a *Agent) AddContext(role, content string) {

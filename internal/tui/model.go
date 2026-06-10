@@ -507,20 +507,43 @@ func (m Model) View() string {
 
 func (m *Model) updateSuggestions() {
 	val := m.input.Value()
-	if !strings.HasPrefix(val, "/") || strings.ContainsRune(val, ' ') {
+	if !strings.HasPrefix(val, "/") || m.agent == nil {
 		m.suggestions = nil
 		m.suggestionIdx = -1
 		return
 	}
 	query := strings.ToLower(val)
 	var matches []string
-	if m.agent != nil {
+
+	if strings.ContainsRune(val, ' ') {
+		// Andet-ords-komplettering: tilbyd kun fraser med statiske subkommandoer
+		// (fx "/mode beginner", "/sound on") — aldrig placeholder-poster som
+		// "/spec <navn>", der ville indsætte "<navn>" bogstaveligt.
+		for _, cmd := range m.agent.Commands() {
+			if !strings.ContainsRune(cmd, ' ') || strings.ContainsAny(cmd, "<[") {
+				continue
+			}
+			if strings.HasPrefix(strings.ToLower(cmd), query) && cmd != val {
+				matches = append(matches, cmd)
+			}
+		}
+		// Dynamiske hook-navne: "/hook te" → "/hook test"
+		if strings.HasPrefix(query, "/hook ") {
+			for _, h := range m.agent.HookNames() {
+				full := "/hook " + h
+				if strings.HasPrefix(strings.ToLower(full), query) && full != val {
+					matches = append(matches, full)
+				}
+			}
+		}
+	} else {
 		for _, cmd := range m.agent.Commands() {
 			if strings.HasPrefix(strings.ToLower(cmd), query) && cmd != val {
 				matches = append(matches, cmd)
 			}
 		}
 	}
+
 	m.suggestions = matches
 	if m.suggestionIdx >= len(matches) {
 		m.suggestionIdx = -1
