@@ -13,6 +13,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/danskode/ekte/internal/agent"
+	"github.com/danskode/ekte/internal/consent"
 	"github.com/danskode/ekte/internal/ektelog"
 	"github.com/danskode/ekte/internal/git"
 	"github.com/danskode/ekte/internal/obs"
@@ -88,6 +89,24 @@ func runTUI(sessionArg string, autoApprove bool) {
 		}
 		globalCfg, _ = provider.LoadConfig(globalConfigPath)
 		cfg = provider.MergeConfigs(globalCfg, localCfg)
+	}
+
+	// Privat base_url kræver samtykke: gemt i ~/.ekte/consent.yaml, givet
+	// interaktivt her, eller EKTE_ALLOW_LOCAL_PROVIDER (headless override).
+	// Projekt-config kan ikke selv give samtykke — filen bor kun globalt.
+	if cfg != nil && consent.IsPrivateURL(cfg.BaseURL) {
+		switch {
+		case consent.EnvOverride() || consent.Granted(globalDir, cfg.BaseURL):
+			cfg.AllowLocal = true
+		case promptLocalProviderConsent(cfg.BaseURL):
+			if err := consent.Grant(globalDir, cfg.BaseURL); err != nil {
+				fmt.Fprintf(os.Stderr, "advarsel: kunne ikke gemme samtykke: %v\n", err)
+			}
+			cfg.AllowLocal = true
+		default:
+			fmt.Println("\nAfvist. Ret base_url i .ekte/config.yaml, eller genstart og svar 'j'.")
+			os.Exit(0)
+		}
 	}
 
 	if cfg != nil {
@@ -186,12 +205,28 @@ func runTUI(sessionArg string, autoApprove bool) {
 		WorkDirForMemory: cwd,
 		GlobalConfigPath: globalConfigPath,
 		LocalConfigPath:  localConfigPath,
+		GrantLocalURL: func(u string) error {
+			// Kaldes kun af agenten efter eksplicit 'j' i model-wizardens
+			// bekræftelsestrin — samtykket gemmes globalt som ved opstart.
+			return consent.Grant(globalDir, u)
+		},
 		OnProviderReload: func() (provider.Provider, string, string, int, string, error) {
 			newGlobal, _ := provider.LoadConfig(globalConfigPath)
 			newLocal, _ := provider.LoadConfig(localConfigPath)
 			newCfg := provider.MergeConfigs(newGlobal, newLocal)
 			if newCfg == nil {
 				return nil, "", "", 0, "", fmt.Errorf("ingen config fundet")
+			}
+			// Genvalidér disk-config'ens URL mod samtykkelisten: er filen
+			// ændret udenom wizarden til en ikke-godkendt privat URL, afvises
+			// reload — den nye URL kræver bekræftelse ved næste opstart.
+			if consent.IsPrivateURL(newCfg.BaseURL) {
+				if consent.EnvOverride() || consent.Granted(globalDir, newCfg.BaseURL) {
+					newCfg.AllowLocal = true
+				} else {
+					return nil, "", "", 0, "", fmt.Errorf(
+						"base_url %s er privat og ikke godkendt — genstart ekte for at bekræfte", newCfg.BaseURL)
+				}
 			}
 			newProv, err := provider.NewFromConfig(newCfg)
 			if err != nil {
@@ -290,6 +325,28 @@ func promptProfile() ekteProfile {
 	return ekteProfile{UserName: userName, AgentName: agentName}
 }
 
+// promptLocalProviderConsent viser opstartsdialogen for en privat provider-URL
+// — i stil med onboardingens tillidstrin. Returnerer true ved 'j'.
+func promptLocalProviderConsent(baseURL string) bool {
+	bold := "\033[1m"
+	reset := "\033[0m"
+	dim := "\033[2m"
+
+	fmt.Println()
+	fmt.Printf("%s⚠  Lokal provider%s\n", bold, reset)
+	fmt.Println(strings.Repeat("─", 48))
+	fmt.Println()
+	fmt.Printf("config peger på %s%s%s (privat adresse).\n", bold, baseURL, reset)
+	fmt.Printf("%sTypisk Ollama eller LM Studio — bekræft kun hvis du selv har sat den.%s\n", dim, reset)
+	fmt.Println()
+	fmt.Printf("Tillad? [j/n] > ")
+
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "j" || answer == "ja" || answer == "y" || answer == "yes"
+}
+
 func promptAPISetup(configPath string) bool {
 	reader := bufio.NewReader(os.Stdin)
 	bold := "\033[1m"
@@ -381,6 +438,13 @@ func setupOllama(reader *bufio.Reader, configPath string) bool {
 	}
 
 	setConfigProvider(configPath, "openai", model, baseURL)
+	// Brugeren har selv indtastet/bekræftet URL'en her — gem samtykket med det
+	// samme, så opstartsdialogen ikke spørger igen om to sekunder.
+	if consent.IsPrivateURL(baseURL) {
+		if err := consent.Grant(globalEkteDir(), baseURL); err != nil {
+			fmt.Fprintf(os.Stderr, "advarsel: kunne ikke gemme samtykke: %v\n", err)
+		}
+	}
 	fmt.Printf("\n✓ Config gemt. Starter ekte...\n\n")
 	return true
 }

@@ -108,6 +108,10 @@ type Config struct {
 	BaseURL string
 	// OnProviderReload genindlæser config og returnerer ny provider + metadata + baseURL.
 	OnProviderReload func() (provider.Provider, string, string, int, string, error)
+	// GrantLocalURL gemmer brugerens samtykke til en privat provider-URL.
+	// Wires op af cmd/ekte (internal/consent) og kaldes KUN efter eksplicit
+	// 'j' i model-wizardens bekræftelsestrin — aldrig fra tool calls.
+	GrantLocalURL func(url string) error
 }
 
 type Agent struct {
@@ -1765,8 +1769,12 @@ func (a *Agent) handleModel(arg string) []Event {
 			return []Event{{Type: EventSystem, Content: "Ugyldigt modelnavn: " + err.Error()}}
 		}
 		a.modelWizard = &modelWizardState{step: 4, provider: "openai", model: modelName, baseURL: baseURL}
+		privateWarn := ""
+		if baseURLIsPrivate(baseURL) {
+			privateWarn = "\n⚠ URL peger på lokal/privat adresse — 'j' gemmer permanent samtykke for præcis denne URL."
+		}
 		return []Event{{Type: EventSystem, Content: fmt.Sprintf(
-			"Skift til %s / %s via %s.\nSkriv 'j' for at bekræfte eller 'n' for at annullere.", parts[0], modelName, baseURL)}}
+			"Skift til %s / %s via %s.%s\nSkriv 'j' for at bekræfte eller 'n' for at annullere.", parts[0], modelName, baseURL, privateWarn)}}
 
 	default:
 		return []Event{{Type: EventSystem, Content: "Ukendt /model-argument. Brug '/model setup' eller '/model' for hjælp."}}
@@ -1905,7 +1913,7 @@ func (a *Agent) advanceModelWizard(input string) []Event {
 		}
 		privateWarn := ""
 		if baseURLIsPrivate(w.baseURL) {
-			privateWarn = "\n⚠ URL peger på lokal/privat adresse — bekræft at du selv har sat den."
+			privateWarn = "\n⚠ URL peger på lokal/privat adresse — 'j' gemmer permanent samtykke for præcis denne URL."
 		}
 		return []Event{{Type: EventSystem, Content: fmt.Sprintf(
 			"Gem denne konfiguration?\n\n  Provider:    %s\n%s  Model:       %s\n%s\nj = gem · n/annuller = afbryd%s",
@@ -1928,23 +1936,13 @@ func validateBaseURL(raw string) error {
 	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
 		return fmt.Errorf("URL skal starte med http:// eller https://")
 	}
-	u, err := url.Parse(raw)
-	if err != nil {
+	if _, err := url.Parse(raw); err != nil {
 		return fmt.Errorf("ugyldig URL: %w", err)
 	}
-	// Bloker private/loopback-adresser med mindre brugeren eksplicit tillader det.
-	// Legitim LM Studio/Ollama-brug: sæt EKTE_ALLOW_LOCAL_PROVIDER=1.
-	if os.Getenv("EKTE_ALLOW_LOCAL_PROVIDER") == "" {
-		host := u.Hostname()
-		if host == "localhost" || host == "ip6-localhost" {
-			return fmt.Errorf("lokal URL ikke tilladt (sæt EKTE_ALLOW_LOCAL_PROVIDER=1 for LM Studio/Ollama)")
-		}
-		if ip := net.ParseIP(host); ip != nil {
-			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
-				return fmt.Errorf("privat/loopback IP ikke tilladt (sæt EKTE_ALLOW_LOCAL_PROVIDER=1 for lokale modeller)")
-			}
-		}
-	}
+	// Private/loopback-URL'er blokeres ikke længere her: bekræftelsestrinnet
+	// viser en ⚠-advarsel, og 'j' gemmer samtykke via GrantLocalURL
+	// (internal/consent). Runtime-håndhævelsen sker i provider-lagets
+	// DialContext-tjek, som kun åbnes af netop dét samtykke eller env-varen.
 	return nil
 }
 
@@ -1987,6 +1985,15 @@ func (a *Agent) applyModelConfig() []Event {
 	}
 	if targetPath == "" {
 		return []Event{{Type: EventError, Content: "Ingen config-sti konfigureret — kan ikke gemme."}}
+	}
+
+	// Brugeren har netop bekræftet konfigurationen med 'j' — og blev advaret
+	// hvis URL'en er privat. Gem samtykket (globalt, via cmd/ekte's callback)
+	// inden reload, ellers afviser reload-valideringen den nye URL.
+	if w.baseURL != "" && baseURLIsPrivate(w.baseURL) && a.cfg.GrantLocalURL != nil {
+		if err := a.cfg.GrantLocalURL(w.baseURL); err != nil {
+			return []Event{{Type: EventError, Content: "Kunne ikke gemme samtykke til lokal provider: " + err.Error()}}
+		}
 	}
 
 	if w.provider != "" || w.model != "" {

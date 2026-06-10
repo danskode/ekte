@@ -70,9 +70,14 @@ type GoalConfig struct {
 }
 
 type Config struct {
-	Provider    string                `yaml:"provider"`
-	Model       string                `yaml:"model"`
-	BaseURL     string                `yaml:"base_url"`
+	Provider string `yaml:"provider"`
+	Model    string `yaml:"model"`
+	BaseURL  string `yaml:"base_url"`
+	// AllowLocal tillader private/loopback provider-URL'er. Sættes KUN
+	// programmatisk af cmd/ekte efter interaktivt samtykke (internal/consent)
+	// eller EKTE_ALLOW_LOCAL_PROVIDER — aldrig fra YAML, så en manipuleret
+	// config-fil ikke kan give sig selv tilladelsen.
+	AllowLocal  bool                  `yaml:"-"`
 	APIKey      string                `yaml:"api_key"` // læses kun fra env — advarsel hvis sat i fil
 	ContextSize int                   `yaml:"context_size"` // 0 = brug default (200000)
 	Wiki        WikiConfig            `yaml:"wiki"`

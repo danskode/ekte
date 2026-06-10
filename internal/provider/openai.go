@@ -47,7 +47,9 @@ func NewOpenAIProvider(cfg *Config) *OpenAIProvider {
 	if baseDial == nil {
 		baseDial = (&net.Dialer{}).DialContext
 	}
-	allowLocal := os.Getenv("EKTE_ALLOW_LOCAL_PROVIDER") != ""
+	// AllowLocal sættes af cmd/ekte efter interaktivt samtykke (internal/consent);
+	// env-varen er headless-override. Begge åbner for private IP'er i dial-tjekket.
+	allowLocal := cfg.AllowLocal || os.Getenv("EKTE_ALLOW_LOCAL_PROVIDER") != ""
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if !allowLocal {
 			host, _, _ := net.SplitHostPort(addr)
@@ -55,7 +57,7 @@ func NewOpenAIProvider(cfg *Config) *OpenAIProvider {
 				for _, ipStr := range ips {
 					if ip := net.ParseIP(ipStr); ip != nil {
 						if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
-							return nil, fmt.Errorf("provider-URL peger på privat/intern IP %s (sæt EKTE_ALLOW_LOCAL_PROVIDER=1 for lokale modeller)", ipStr)
+							return nil, fmt.Errorf("provider-URL peger på privat/intern IP %s — bekræft lokal provider ved opstart, eller sæt EKTE_ALLOW_LOCAL_PROVIDER=1 til headless brug", ipStr)
 						}
 					}
 				}
