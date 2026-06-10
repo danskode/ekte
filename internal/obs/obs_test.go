@@ -310,8 +310,8 @@ func TestFormatAllTUIEmpty(t *testing.T) {
 func TestFormatAllTUIFiltersOldYears(t *testing.T) {
 	summaries := []SessionSummary{
 		{
-			SessionID: "old",
-			Date:      time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			SessionID:  "old",
+			Date:       time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 			ByProvider: map[string]int{"anthropic/claude": 5000},
 		},
 		{
@@ -378,12 +378,12 @@ func TestWriteHTMLWithSessions(t *testing.T) {
 	now := time.Now()
 	summaries := []SessionSummary{
 		{
-			SessionID:  "20260601-120000",
-			Date:       now,
-			TurnCount:  3,
-			TotalInput: 5000,
+			SessionID:   "20260601-120000",
+			Date:        now,
+			TurnCount:   3,
+			TotalInput:  5000,
 			TotalOutput: 800,
-			ByProvider: map[string]int{"anthropic/claude": 5000},
+			ByProvider:  map[string]int{"anthropic/claude": 5000},
 		},
 	}
 	dir := t.TempDir()

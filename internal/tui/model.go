@@ -18,14 +18,13 @@ import (
 )
 
 const (
-	defaultMaxTokens = 200000
-	warnThreshold    = 0.75
-	critThreshold    = 0.90
+	defaultMaxTokens  = 200000
+	warnThreshold     = 0.75
+	critThreshold     = 0.90
 	toolPanelMinWidth = 36
 	toolPanelMaxWidth = 72
 	toolPanelRatio    = 0.38 // 38% af terminalbredden
 )
-
 
 type Model struct {
 	width, height int
@@ -410,7 +409,7 @@ func (m Model) renderConfirmPrompt() string {
 		return lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorWarn).
-			Width(m.width - 4).
+			Width(m.width-4).
 			Padding(0, 1).
 			Render(line1 + "\n" + hint + "\n" + m.input.View())
 	}
@@ -425,7 +424,7 @@ func (m Model) renderConfirmPrompt() string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorWarn).
-		Width(m.width - 4).
+		Width(m.width-4).
 		Padding(0, 1).
 		Render(line1 + "\n" + line2)
 }

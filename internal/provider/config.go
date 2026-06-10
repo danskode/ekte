@@ -29,12 +29,12 @@ type WhitelistConfig struct {
 // ContainerSpec beskriver hvordan en hook køres i en isoleret container.
 type ContainerSpec struct {
 	Image   string   `yaml:"image"`
-	Network bool     `yaml:"network,omitempty"`  // default false = --network none
-	Memory  string   `yaml:"memory,omitempty"`   // default "512m"
-	CPUs    string   `yaml:"cpus,omitempty"`     // default "1"
-	Workdir string   `yaml:"workdir,omitempty"`  // default "/work"
-	Ports   []string `yaml:"ports,omitempty"`    // ["8080:8080"]
-	Env     []string `yaml:"env,omitempty"`      // eksplicitte KEY=VALUE — arves ikke fra host
+	Network bool     `yaml:"network,omitempty"` // default false = --network none
+	Memory  string   `yaml:"memory,omitempty"`  // default "512m"
+	CPUs    string   `yaml:"cpus,omitempty"`    // default "1"
+	Workdir string   `yaml:"workdir,omitempty"` // default "/work"
+	Ports   []string `yaml:"ports,omitempty"`   // ["8080:8080"]
+	Env     []string `yaml:"env,omitempty"`     // eksplicitte KEY=VALUE — arves ikke fra host
 }
 
 // HookConfig beskriver én hook — enten en simpel shell-kommando eller en
@@ -78,7 +78,7 @@ type Config struct {
 	// eller EKTE_ALLOW_LOCAL_PROVIDER — aldrig fra YAML, så en manipuleret
 	// config-fil ikke kan give sig selv tilladelsen.
 	AllowLocal  bool                  `yaml:"-"`
-	APIKey      string                `yaml:"api_key"` // læses kun fra env — advarsel hvis sat i fil
+	APIKey      string                `yaml:"api_key"`      // læses kun fra env — advarsel hvis sat i fil
 	ContextSize int                   `yaml:"context_size"` // 0 = brug default (200000)
 	Wiki        WikiConfig            `yaml:"wiki"`
 	Whitelist   WhitelistConfig       `yaml:"whitelist"`
