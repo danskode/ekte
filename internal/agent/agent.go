@@ -27,6 +27,7 @@ import (
 	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/tools"
 	"github.com/danskode/ekte/internal/wiki"
+	"gopkg.in/yaml.v3"
 )
 
 type EventType int
@@ -1120,8 +1121,9 @@ func sanitizeFileContent(content string) string {
 }
 
 // appendHookWarning tilføjer en advarsel til bekræftelsesbeskeden hvis
-// ændringen berører hooks-sektionen i config.yaml. Viser den rå hooks-sektion
-// fra YAML frem for at parse enkeltlinjer — sikrer at block scalars mv. ses.
+// ændringen berører hooks-sektionen i config.yaml. Bruger yaml.Unmarshal til
+// at parse indholdet — block scalars ('cmd: |') ekspanderes automatisk, så
+// skjulte kommandoer altid er synlige i advarslen (CWE-116).
 func appendHookWarning(desc string, tc provider.ToolCall) string {
 	var args map[string]any
 	if json.Unmarshal(tc.Input, &args) != nil {
@@ -1134,26 +1136,25 @@ func appendHookWarning(desc string, tc provider.ToolCall) string {
 	if content == "" || !strings.Contains(content, "hooks:") {
 		return desc
 	}
-	// Udtræk hooks-blokken fra YAML-indholdet og vis den rå —
-	// linje-for-linje cmd:-parsing fanget ikke block scalars (CWE-116).
-	var hooksSection strings.Builder
-	inHooks := false
-	for _, line := range strings.Split(content, "\n") {
-		if strings.TrimSpace(line) == "hooks:" || strings.HasPrefix(strings.TrimSpace(line), "hooks:") {
-			inHooks = true
-		}
-		if inHooks {
-			// Stop ved næste top-niveau nøgle (ingen indrykning)
-			if hooksSection.Len() > 0 && len(line) > 0 && line[0] != ' ' && line[0] != '\t' && !strings.HasPrefix(strings.TrimSpace(line), "hooks:") {
-				break
-			}
-			hooksSection.WriteString(line + "\n")
-		}
+
+	// Parse YAML så block scalars ekspanderes korrekt (CWE-116).
+	// yaml.Unmarshal løser 'cmd: |' og indenterede linjer til én streng —
+	// skjulte kommandoer er dermed altid synlige i den viste advarsel.
+	var cfg struct {
+		Hooks map[string]provider.HookConfig `yaml:"hooks"`
 	}
-	if hooksSection.Len() == 0 {
-		return desc
+	if err := yaml.Unmarshal([]byte(content), &cfg); err != nil || len(cfg.Hooks) == 0 {
+		// Kan ikke parses som fuld config — vis rå indhold som fallback.
+		return desc + "\n⚠ HOOKS ÆNDRES (rå YAML — kan ikke parses struktureret):\n" + content
 	}
-	return desc + "\n⚠ HOOKS DER AKTIVERES (shell-kommandoer):\n" + hooksSection.String()
+
+	var sb strings.Builder
+	sb.WriteString("\n⚠ HOOKS DER AKTIVERES (shell-kommandoer):\n")
+	for name, hc := range cfg.Hooks {
+		cmd := strings.TrimSpace(hc.Cmd)
+		sb.WriteString(fmt.Sprintf("  • %s: %s\n", name, cmd))
+	}
+	return desc + sb.String()
 }
 
 func toolConfirmDesc(tc provider.ToolCall) string {
