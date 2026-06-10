@@ -12,6 +12,8 @@ import (
 	"sort"
 
 	"github.com/sashabaranov/go-openai"
+
+	"github.com/danskode/ekte/internal/netsafe"
 )
 
 type OpenAIProvider struct {
@@ -41,8 +43,10 @@ func NewOpenAIProvider(cfg *Config) *OpenAIProvider {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DisableKeepAlives = true
 	// Tilføj DialContext-hook der validerer resolved IP mod private ranges
-	// for at forhindre DNS rebinding-angreb (CWE-918). Spejler logikken fra
-	// internal/tools/fetch.go — kan ikke genbruges direkte (cirkulær dep).
+	// for at forhindre DNS rebinding-angreb (CWE-918). Resolver DNS præcis
+	// ét sted og dialer til den validerede IP — så kan et senere, uafhængigt
+	// opslag ikke pege forbindelsen om til en privat adresse (TOCTOU).
+	// LookupHost-fejl afvises (fail closed).
 	baseDial := tr.DialContext
 	if baseDial == nil {
 		baseDial = (&net.Dialer{}).DialContext
@@ -51,19 +55,30 @@ func NewOpenAIProvider(cfg *Config) *OpenAIProvider {
 	// env-varen er headless-override. Begge åbner for private IP'er i dial-tjekket.
 	allowLocal := cfg.AllowLocal || os.Getenv("EKTE_ALLOW_LOCAL_PROVIDER") != ""
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if !allowLocal {
-			host, _, _ := net.SplitHostPort(addr)
-			if ips, err := net.DefaultResolver.LookupHost(ctx, host); err == nil {
-				for _, ipStr := range ips {
-					if ip := net.ParseIP(ipStr); ip != nil {
-						if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
-							return nil, fmt.Errorf("provider-URL peger på privat/intern IP %s — bekræft lokal provider ved opstart, eller sæt EKTE_ALLOW_LOCAL_PROVIDER=1 til headless brug", ipStr)
-						}
-					}
-				}
+		if allowLocal {
+			return baseDial(ctx, network, addr)
+		}
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := net.DefaultResolver.LookupHost(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("DNS-opslag for provider-URL fejlede: %w", err)
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("DNS-opslag gav ingen resultater for %s", host)
+		}
+		for _, ipStr := range ips {
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				return nil, fmt.Errorf("DNS-opslag for %s gav uparserbar adresse %q", host, ipStr)
+			}
+			if netsafe.IsPrivateIP(ip) {
+				return nil, fmt.Errorf("provider-URL peger på privat/intern IP %s — bekræft lokal provider ved opstart, eller sæt EKTE_ALLOW_LOCAL_PROVIDER=1 til headless brug", ipStr)
 			}
 		}
-		return baseDial(ctx, network, addr)
+		return baseDial(ctx, network, net.JoinHostPort(ips[0], port))
 	}
 	clientCfg.HTTPClient = &http.Client{Transport: tr}
 	return &OpenAIProvider{
