@@ -224,6 +224,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.InsertString("\n")
 			return m, nil
 		}
+		// Shift+Tab skifter arbejdsmode (plan ↔ develop) — som i Claude Code.
+		if msg.String() == "shift+tab" && !m.pendingConfirm && !m.streaming {
+			return m, startStreamCmd(m.agent, "/mode toggle")
+		}
 		if msg.String() == "alt+O" {
 			m.pendingShiftEnter = true
 			return m, nil
@@ -521,6 +525,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case agent.EventTokenCount:
 			m.tokenCount = msg.Tokens
+
+		case agent.EventModelInfo:
+			if msg.Tokens > 0 {
+				m.maxTokens = msg.Tokens
+			}
+			if msg.Content != "" {
+				m.modelName = msg.Content
+			}
 
 		case agent.EventToolOutput:
 			m.streamBuf = ""

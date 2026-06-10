@@ -355,6 +355,9 @@ func (a *Agent) applyModelConfig() []Event {
 	}
 	return []Event{
 		{Type: EventSystem, Content: fmt.Sprintf("✓ Provider skiftet til %s / %s%s — aktiv nu. Gemt i: %s", provName, modelName, urlPart, targetPath)},
+		// Giv TUI'en besked om ny model og kontekststørrelse, så statuslinjens
+		// "kontekst: x/N" og modelnavn opdateres uden genstart.
+		{Type: EventModelInfo, Content: modelName, Tokens: ctxSize},
 		{Type: EventTokenCount, Tokens: a.tokenCount},
 	}
 }

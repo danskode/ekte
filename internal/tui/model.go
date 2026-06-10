@@ -67,6 +67,7 @@ type Model struct {
 
 	tokenCount int
 	maxTokens  int
+	modelName  string // vises i statuslinjen; opdateres via EventModelInfo
 	spinner    spinner.Model
 	agent      *agent.Agent
 	ready      bool
@@ -112,6 +113,12 @@ func (m *Model) SetMaxTokens(n int) {
 	if n > 0 {
 		m.maxTokens = n
 	}
+}
+
+// SetModelName sætter modelnavnet til statuslinjen (sættes ved opstart;
+// opdateres derefter via EventModelInfo når /model skifter model).
+func (m *Model) SetModelName(name string) {
+	m.modelName = name
 }
 
 func (m Model) Init() tea.Cmd {
@@ -370,6 +377,20 @@ func (m Model) statusBar() string {
 	ctx := fmt.Sprintf("kontekst: %d/%d", m.tokenCount, m.maxTokens)
 	ctxStyled := m.contextStyle().Render(ctx)
 
+	modelIndicator := ""
+	if m.modelName != "" {
+		name := []rune(m.modelName)
+		if len(name) > 28 {
+			name = append(name[:27], '…')
+		}
+		modelIndicator = "  " + styleSystem.Render(string(name))
+	}
+
+	modeIndicator := ""
+	if m.agent != nil {
+		modeIndicator = "  " + styleSlashCmd.Render("mode:"+m.agent.WorkMode())
+	}
+
 	skillIndicator := ""
 	if m.agent != nil && m.agent.ActiveSkill() != nil {
 		skillIndicator = "  " + styleSlashCmd.Render("skill:"+m.agent.ActiveSkill().Name)
@@ -387,7 +408,7 @@ func (m Model) statusBar() string {
 		right = styleStatusBar.Render(styleSystem.Render("PgUp/PgDn: scrol · Ctrl+Y: kopiér " + soundIcon + " · /hjælp"))
 	}
 
-	left := styleStatusBar.Render(ctxStyled + skillIndicator)
+	left := styleStatusBar.Render(ctxStyled + modelIndicator + modeIndicator + skillIndicator)
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0

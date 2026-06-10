@@ -31,9 +31,18 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 		return []Event{{Type: EventSystem, Content: helpText()}}
 
 	case "/clear":
-		a.messages = nil
-		a.tokenCount = 0
-		return []Event{{Type: EventSystem, Content: ""}}
+		// Gendan baseline i stedet for at nulstille alt — ellers fortsætter
+		// samtalen uden systemprompt, hukommelse og hook-viden.
+		a.messages = append([]provider.Message(nil), a.baseline...)
+		a.planMode = false
+		a.planFile = ""
+		a.tokenCount = estimateTokens(a.messages)
+		// EventTokenCount FØR den tomme EventSystem — TUI'en stopper
+		// stream-læsningen når den ser clear-signalet.
+		return []Event{
+			{Type: EventTokenCount, Tokens: a.tokenCount},
+			{Type: EventSystem, Content: ""},
+		}
 
 	case "/skills":
 		return a.handleSkills(arg)
@@ -234,6 +243,9 @@ func (a *Agent) handleContext() []Event {
 	} else {
 		sb.WriteString(fmt.Sprintf("  %-14s (ingen endnu)\n", "HISTORIK"))
 	}
+	// Uden denne linje summer kategorierne ikke til totalen — estimateTokens
+	// lægger et fast overhead på 500 oveni (tool-definitioner, metadata).
+	sb.WriteString(fmt.Sprintf("  %-14s tool-definitioner og besked-metadata — ~500 tokens\n", "OVERHEAD"))
 	if a.cfg.Wiki != nil {
 		sb.WriteString(fmt.Sprintf("  %-14s injiceres automatisk ved relevante prompts (op til 40%% af kontekst)\n", "WIKI"))
 	}
@@ -244,11 +256,7 @@ func (a *Agent) handleContext() []Event {
 	// Videnslager
 	sb.WriteString("Videnslager (forespørg med /wiki):\n")
 	if a.cfg.Wiki != nil {
-		wikiPath := ""
-		if cfg := a.cfg.Wiki; cfg != nil {
-			wikiPath = " (" + a.cfg.WorkDir + "/wiki)"
-		}
-		sb.WriteString("  simple-minded" + wikiPath + "\n")
+		sb.WriteString("  simple-minded (" + a.cfg.Wiki.Root() + ")\n")
 	} else {
 		sb.WriteString("  (ikke konfigureret — tilføj wiki: path: ./wiki i .ekte/config.yaml)\n")
 	}
@@ -313,20 +321,40 @@ func (a *Agent) handleSecurity() []Event {
 
 func (a *Agent) handleMode(arg string) []Event {
 	switch strings.ToLower(arg) {
+	// Arbejdsmode: plan (Architect of Intent) eller develop (implementering).
+	// Skiftes også med Shift+Tab i TUI'en.
+	case "plan":
+		return a.enterPlanMode()
+	case "develop", "dev", "udvikl":
+		return a.exitPlanMode()
+	case "toggle":
+		if a.planMode {
+			return a.exitPlanMode()
+		}
+		return a.enterPlanMode()
+
+	// Verbositet: beginner (hints) eller expert (stille).
 	case "beginner", "nybegynder":
 		a.cfg.Mode = "beginner"
 		return []Event{{Type: EventSystem, Content: "✓ Tilstand: beginner — wiki-hints og hjælpetekster aktiveret"}}
 	case "expert", "ekspert":
 		a.cfg.Mode = "expert"
 		return []Event{{Type: EventSystem, Content: "✓ Tilstand: expert — stille tilstand, ingen automatiske hints"}}
+
 	case "":
-		mode := a.cfg.Mode
-		if mode == "" {
-			mode = "beginner"
+		verb := a.cfg.Mode
+		if verb == "" {
+			verb = "beginner"
 		}
-		return []Event{{Type: EventSystem, Content: "Tilstand: " + mode + "\nBrug: /mode beginner eller /mode expert"}}
+		return []Event{{Type: EventSystem, Content: fmt.Sprintf(
+			"Arbejdsmode: %s · verbositet: %s\n\n"+
+				"  /mode plan      — Architect of Intent (ingen kode, kvalificér intent)\n"+
+				"  /mode develop   — implementering\n"+
+				"  /mode beginner  — hints aktiveret\n"+
+				"  /mode expert    — stille tilstand\n\n"+
+				"Shift+Tab skifter mellem plan og develop.", a.WorkMode(), verb)}}
 	default:
-		return []Event{{Type: EventSystem, Content: "Ukendt tilstand: " + arg + " — vælg 'beginner' eller 'expert'"}}
+		return []Event{{Type: EventSystem, Content: "Ukendt tilstand: " + arg + " — vælg plan, develop, beginner eller expert"}}
 	}
 }
 
@@ -901,6 +929,8 @@ var builtinCommands = [][2]string{
 	{"/remember <tekst>", "gem en note i hukommelsen (.ekte/memory/)"},
 	{"/context", "vis alle tre lag med token-estimater"},
 	{"/security", "vis sikkerhedsstatus, whitelist og guardrails"},
+	{"/mode plan", "Architect of Intent — kvalificér intent, ingen kode (Shift+Tab)"},
+	{"/mode develop", "implementeringstilstand (Shift+Tab)"},
 	{"/mode beginner", "hints og hjælpetekster aktiveret"},
 	{"/mode expert", "stille tilstand, ingen automatiske hints"},
 	{"/plan <beskrivelse>", "Architect of Intent mode — kvalificér intent inden implementering"},

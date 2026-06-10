@@ -239,6 +239,7 @@ func runTUI(sessionArg string, autoApprove bool) {
 	m := tui.New(a)
 	m.SetNames(profile.UserName, profile.AgentName)
 	m.SetMaxTokens(contextSize)
+	m.SetModelName(modelName)
 
 	if provider.KeyInFile(globalConfigPath) || provider.KeyInFile(localConfigPath) {
 		m.AddWarning("⚠  API-nøgle fundet i config-fil — flyt den til env-variabel:\nexport ANTHROPIC_API_KEY=\"din-nøgle\"  (tilføj til ~/.bashrc)")

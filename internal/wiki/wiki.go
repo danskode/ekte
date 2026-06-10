@@ -25,6 +25,9 @@ type Wiki struct {
 	root string
 }
 
+// Root returnerer wikiens rodmappe — til visning i fx /context.
+func (w *Wiki) Root() string { return w.root }
+
 func New(cfg *Config) (*Wiki, error) {
 	if cfg == nil || !cfg.Enabled || cfg.Path == "" {
 		return nil, nil

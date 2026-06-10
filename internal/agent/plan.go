@@ -35,6 +35,31 @@ Regler:
 Afslutning:
 Når /plan godkend køres: opsummér planen, skriv den til .ekte/plans/ og bekræft klar til implementering.`
 
+// enterPlanMode aktiverer plan mode uden startbeskrivelse — bruges af
+// /mode plan og Shift+Tab. /plan <beskrivelse> starter desuden samtalen.
+func (a *Agent) enterPlanMode() []Event {
+	if a.planMode {
+		return []Event{{Type: EventSystem, Content: "Plan mode er allerede aktiv.\nBrug: /plan godkend · /plan vis · /plan afvis"}}
+	}
+	a.planMode = true
+	a.planFile = ""
+	a.messages = append(a.messages, provider.Message{
+		Role:    "system",
+		Content: planModeSystemPrompt,
+	})
+	return []Event{{Type: EventSystem, Content: "📋 Plan mode — jeg er Architect of Intent og skriver ingen kode.\nBeskriv hvad du vil bygge; /plan godkend når planen er klar. (Shift+Tab skifter tilbage til develop)"}}
+}
+
+// exitPlanMode skifter tilbage til develop uden at gemme en plan.
+func (a *Agent) exitPlanMode() []Event {
+	if !a.planMode {
+		return []Event{{Type: EventSystem, Content: "Develop mode er allerede aktiv."}}
+	}
+	a.planMode = false
+	a.planFile = ""
+	return []Event{{Type: EventSystem, Content: "✓ Develop mode — plan mode afsluttet uden gemt plan (brug /plan godkend næste gang for at gemme)."}}
+}
+
 // handlePlanGodkend kører bekræftelse via j/n/tab i chat-inputfeltet (EventToolConfirm).
 // Blocking — kalder direkte på ch i stedet for at returnere []Event.
 func (a *Agent) handlePlanGodkend(ctx context.Context, ch chan<- Event) {
