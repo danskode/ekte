@@ -286,6 +286,10 @@ func (a *Agent) WorkMode() string {
 	return "develop"
 }
 
+// InWizard rapporterer om model-wizarden er aktiv. TUI'en bruger det til at
+// lade tom Enter ("behold nuværende værdi") passere ned til agenten.
+func (a *Agent) InWizard() bool { return a.modelWizard != nil }
+
 // ToggleWorkMode skifter mellem plan og develop — kaldes af TUI'ens Shift+Tab.
 func (a *Agent) ToggleWorkMode() []Event {
 	if a.planMode {
@@ -314,6 +318,10 @@ func (a *Agent) AddContext(role, content string) {
 // Process håndterer bruger-input og returnerer events til præsentationslaget.
 func (a *Agent) Process(ctx context.Context, input string) []Event {
 	input = strings.TrimSpace(input)
+	// Wizard før tom-tjek — tom Enter betyder "behold" i wizard-trinnene.
+	if a.modelWizard != nil {
+		return a.advanceModelWizard(input)
+	}
 	if input == "" {
 		return nil
 	}
@@ -359,14 +367,15 @@ func (a *Agent) ProcessStream(ctx context.Context, input string) <-chan Event {
 	go func() {
 		defer close(ch)
 		input = strings.TrimSpace(input)
-		if input == "" {
-			return
-		}
-		// Model wizard intercepter al input mens den er aktiv
+		// Model wizard intercepter al input mens den er aktiv — FØR tom-tjekket:
+		// tom Enter betyder "behold nuværende værdi" i wizard-trinnene.
 		if a.modelWizard != nil {
 			for _, ev := range a.advanceModelWizard(input) {
 				ch <- ev
 			}
+			return
+		}
+		if input == "" {
 			return
 		}
 		if strings.HasPrefix(input, "/wiki-get") {

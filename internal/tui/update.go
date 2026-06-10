@@ -57,7 +57,8 @@ func initMdCmd(width int) tea.Cmd {
 // submitPrompt sender en prompt til agenten og opdaterer samtalevisningen — fælles
 // for både direkte input og afvikling fra prompt-køen.
 func (m *Model) submitPrompt(val string) tea.Cmd {
-	if val != "/clear" {
+	// Tom prompt (wizard-Enter) vises ikke som user-besked i samtalen.
+	if val != "/clear" && val != "" {
 		m.syncFromAgent()
 		m.messages = append(m.messages, provider.Message{Role: "user", Content: val})
 		m.conversation.SetContent(m.conversationContent())
@@ -227,7 +228,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Shift+Tab skifter arbejdsmode (plan ↔ develop) — som i Claude Code.
 		// Kaldes direkte på agenten (ikke som slash-kommando): /mode er
 		// reserveret til verbositet (beginner/expert), en uafhængig akse.
-		if msg.String() == "shift+tab" && !m.pendingConfirm && !m.streaming && m.agent != nil {
+		if msg.String() == "shift+tab" && !m.pendingConfirm && m.agent != nil {
+			if m.streaming {
+				// Agentens beskedliste muteres af stream-goroutinen lige nu —
+				// skiftet anvendes derfor først når svaret er færdigt (data race
+				// ellers). Tryk igen for at fortryde.
+				m.pendingModeToggle = !m.pendingModeToggle
+				if m.pendingModeToggle {
+					m.appendSystem("⏳ Mode skiftes når svaret er færdigt — Shift+Tab igen fortryder.")
+				} else {
+					m.appendSystem("Mode-skift fortrudt.")
+				}
+				return m, nil
+			}
 			for _, ev := range m.agent.ToggleWorkMode() {
 				if ev.Content != "" {
 					m.appendSystem(ev.Content)
@@ -365,6 +378,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			val := strings.TrimSpace(m.input.Value())
 			if val == "" {
+				// I model-wizarden betyder tom Enter "behold nuværende værdi"
+				// — send den videre i stedet for at sluge den.
+				if m.agent != nil && m.agent.InWizard() && !m.streaming {
+					m.input.Reset()
+					return m, m.submitPrompt("")
+				}
 				return m, nil
 			}
 			// /kø-kommandoer håndteres lokalt i TUI — køen lever i model, ikke agenten
@@ -578,6 +597,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if wasStreaming && !m.streaming {
+		// Anvend et mode-skift bestilt under streaming — FØR næste kø-prompt,
+		// så den afvikles i den mode brugeren bad om.
+		if m.pendingModeToggle && m.agent != nil {
+			m.pendingModeToggle = false
+			for _, ev := range m.agent.ToggleWorkMode() {
+				if ev.Content != "" {
+					m.appendSystem(ev.Content)
+				}
+			}
+		}
 		if cmd := m.dequeueNext(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}

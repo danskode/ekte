@@ -68,9 +68,12 @@ type Model struct {
 	tokenCount int
 	maxTokens  int
 	modelName  string // vises i statuslinjen; opdateres via EventModelInfo
-	spinner    spinner.Model
-	agent      *agent.Agent
-	ready      bool
+	// pendingModeToggle: Shift+Tab trykket mens modellen streamede — skiftet
+	// anvendes når svaret er færdigt (direkte mutation ville give data race).
+	pendingModeToggle bool
+	spinner           spinner.Model
+	agent             *agent.Agent
+	ready             bool
 
 	// exitNote er den seneste system-besked der blev modtaget — ved /exit eller
 	// Ctrl+C er det netop afslutnings-resuméet (sessionsnavn, resume-hint, log-sti).
