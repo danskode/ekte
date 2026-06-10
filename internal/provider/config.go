@@ -218,6 +218,9 @@ func MergeConfigs(global, local *Config) *Config {
 	if local.BaseURL != "" {
 		merged.BaseURL = local.BaseURL
 	}
+	if local.ContextSize > 0 {
+		merged.ContextSize = local.ContextSize
+	}
 	if local.APIKey != "" {
 		merged.APIKey = local.APIKey
 	}

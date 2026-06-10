@@ -39,6 +39,21 @@ func TestMergeConfigsLocalOnly(t *testing.T) {
 	}
 }
 
+// TestMergeConfigsContextSize: regression — context_size sat lokalt (fx af
+// model-wizarden, der foretrækker den lokale config) blev ignoreret ved merge,
+// så statuslinjens kontekst-maks aldrig ændrede sig.
+func TestMergeConfigsContextSize(t *testing.T) {
+	global := &Config{Provider: "openai", ContextSize: 24000}
+	local := &Config{ContextSize: 14000}
+	if got := MergeConfigs(global, local).ContextSize; got != 14000 {
+		t.Errorf("ContextSize: lokal burde overskrive global, fik %d", got)
+	}
+	// Lokal uden context_size → behold global.
+	if got := MergeConfigs(global, &Config{}).ContextSize; got != 24000 {
+		t.Errorf("ContextSize: global burde bevares når lokal ikke sætter den, fik %d", got)
+	}
+}
+
 func TestMergeConfigsLocalOverridesProvider(t *testing.T) {
 	global := &Config{
 		Provider: "anthropic",
