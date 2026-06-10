@@ -17,7 +17,7 @@ setup: install-hooks
 
 install-hooks:
 	@[ -f .git/hooks/pre-push ] && mv .git/hooks/pre-push .git/hooks/pre-push.bak && echo "Eksisterende hook gemt som pre-push.bak" || true
-	@printf '#!/bin/bash\nbash "$$(git rev-parse --show-toplevel)/scripts/security-review.sh"\n' > .git/hooks/pre-push
+	@printf '#!/bin/bash\nbash "$$(git rev-parse --show-toplevel)/scripts/pre-push.sh"\n' > .git/hooks/pre-push
 	@chmod +x .git/hooks/pre-push
 	@echo "Pre-push hook installeret."
 
