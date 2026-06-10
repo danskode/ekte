@@ -10,9 +10,9 @@ import (
 
 func TestBuildBreakdownNoWiki(t *testing.T) {
 	msgs := []provider.Message{
-		{Role: "system", Content: "system prompt her"},       // sys
-		{Role: "user", Content: "tidligere spørgsmål"},       // hist
-		{Role: "assistant", Content: "tidligere svar"},       // hist
+		{Role: "system", Content: "system prompt her"},         // sys
+		{Role: "user", Content: "tidligere spørgsmål"},         // hist
+		{Role: "assistant", Content: "tidligere svar"},         // hist
 		{Role: "user", Content: "nuværende prompt fra bruger"}, // user (sidst)
 	}
 	bd := buildBreakdown(msgs, -1)
@@ -37,8 +37,8 @@ func TestBuildBreakdownNoWiki(t *testing.T) {
 func TestBuildBreakdownWithWiki(t *testing.T) {
 	msgs := []provider.Message{
 		{Role: "system", Content: "wiki kontekst som er ret lang og fylder noget"}, // wikiIdx=0
-		{Role: "system", Content: "system prompt"},                                  // sys (nu index 1? nej)
-		{Role: "user", Content: "prompten"},                                         // user
+		{Role: "system", Content: "system prompt"},                                 // sys (nu index 1? nej)
+		{Role: "user", Content: "prompten"},                                        // user
 	}
 	// wikiIdx=0: første system er wiki, ikke sys
 	bd := buildBreakdown(msgs, 0)
@@ -194,18 +194,19 @@ func TestMax(t *testing.T) {
 // --- estimateTokens ---
 
 func TestEstimateTokensEmpty(t *testing.T) {
-	if estimateTokens(nil) != 0 {
-		t.Error("estimateTokens(nil) burde give 0")
+	// Tomt input giver kun det faste overhead (system-prompt, tool-defs, metadata).
+	if got := estimateTokens(nil); got != 500 {
+		t.Errorf("estimateTokens(nil): forventede 500 (overhead), fik %d", got)
 	}
 }
 
 func TestEstimateTokensBasic(t *testing.T) {
 	msgs := []provider.Message{
-		{Role: "user", Content: "1234"}, // 4 tegn = 1 token
+		{Role: "user", Content: "1234"},          // 4 tegn = 1 token
 		{Role: "assistant", Content: "12345678"}, // 8 tegn = 2 tokens
 	}
 	got := estimateTokens(msgs)
-	if got != 3 {
-		t.Errorf("estimateTokens: forventede 3, fik %d", got)
+	if got != 503 {
+		t.Errorf("estimateTokens: forventede 503 (500 overhead + 3), fik %d", got)
 	}
 }
