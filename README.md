@@ -131,6 +131,17 @@ ollama pull llama3.2
 ollama serve   # hvis den ikke allerede kører som service
 ```
 
+### Lokale providers og samtykke
+
+Når `base_url` peger på en privat adresse (fx `http://localhost:11434/v1`),
+spørger ekte ved første opstart: *"config peger på \<URL\> (privat adresse).
+Tillad? [j/n]"*. Et "j" gemmes pr. præcis URL i `~/.ekte/consent.yaml` —
+ændres URL'en (også bare porten), spørges der igen. Samtykket bor i din
+globale ekte-mappe, så en klonet projekt-config aldrig kan give sig selv lov.
+
+Til headless/scriptet brug kan dialogen springes over med
+`EKTE_ALLOW_LOCAL_PROVIDER=1`.
+
 ---
 
 ## Konfiguration
@@ -178,20 +189,34 @@ Alle kommandoer skrives direkte i input-feltet.
 |---|---|
 | `/hjælp` | Vis liste over alle kommandoer |
 | `/skills [navn]` | Vis tilgængelige skills — angiv navn for at aktivere |
+| `/skills catalog` | Vis SKILLeton-kataloget |
+| `/skills install <navn>` | Installér en skill fra SKILLeton |
 | `/spec <navn>` | Opret en spec og tilhørende git worktree |
 | `/spec merge <navn>` | Merge worktree ind i main og ryd op |
 | `/spec remove <navn>` | Slet worktree uden merge |
+| `/plan <beskrivelse>` | Architect of Intent mode — kvalificér intent inden implementering |
+| `/plan godkend` / `vis` / `afvis` | Gem, vis eller forkast den aktuelle plan |
+| `/goal <beskrivelse>` | Autonom mål-loop: skriv kode → byg → gentag til succes |
 | `/compress` | Komprimer kontekstvinduet — LLM laver et resumé af samtalen |
+| `/context` | Vis kontekstens lag med token-estimater |
 | `/wiki "spørgsmål"` | Søg i din personlige wiki |
-| `/wiki gem <titel>` | Gem seneste `/forresten`-svar i wikien |
-| `/hook` | Vis tilgængelige hooks |
-| `/hook <navn>` | Kør en hook — output vises i tool-panelet |
+| `/wiki-get <url>` | Hent og ingest en webside i wikien |
+| `/wiki-gem <titel>` | Gem seneste `/forresten`-svar i wikien |
+| `/hook [navn]` | Vis tilgængelige hooks — angiv navn for at køre |
 | `/dep <modul>` | Sikkerhedsscore for én Go-afhængighed |
 | `/sec-check` | Scan alle afhængigheder i projektet + ekte-harness |
+| `/security` | Vis sikkerhedsstatus, whitelist og guardrails |
+| `/model` | Vis aktuel provider/model — `setup` starter wizard |
+| `/model ollama <url> <model>` | Skift til lokal Ollama/LM Studio |
+| `/mode beginner` / `expert` | Hints til/fra |
+| `/remember <tekst>` | Gem en note i hukommelsen (`.ekte/memory/`) |
+| `/observ [all\|html]` | Ydelses-statistik (tokens, tok/s, cache-hits) |
+| `/kø` | Vis prompt-køen — `slet <n>` / `ryd` administrerer den |
 | `/forresten <besked>` | Side-chat med en isoleret subagent (husker sin egen historik) |
+| `/navngiv <navn>` | Navngiv den aktuelle session |
+| `/sound on` / `off` | Lydpåmindelse til/fra |
 | `/clear` | Ryd samtalens historik |
-| `/resume` | Vis tidligere gemte sessioner |
-| `/resume <nummer>` | Indlæs en tidligere session |
+| `/resume [nummer]` | Vis eller indlæs tidligere sessioner |
 | `/exit` | Gem session og afslut |
 
 ### Tastatur
@@ -335,11 +360,24 @@ ekte/
 │
 ├── internal/
 │   ├── agent/
-│   │   └── agent.go           # al forretningslogik; Process() → []Event
+│   │   ├── agent.go           # kerne: ProcessStream(input) → <-chan Event, tool-loop
+│   │   ├── slash.go           # alle slash-kommando-handlers
+│   │   ├── sanitize.go        # injection-/ANSI-sanitering og tool-visning
+│   │   ├── plan.go            # /plan — Architect of Intent-flow
+│   │   ├── wizard.go          # /model-wizard og URL-validering
+│   │   └── hooks.go           # hook-kørsel inkl. container-isolation
+│   ├── consent/
+│   │   └── consent.go         # persistent samtykke til lokale provider-URL'er
+│   ├── container/
+│   │   └── container.go       # isolerede hook-containere (docker/podman)
 │   ├── dep/
 │   │   └── dep.go             # sikkerhedsscore via proxy.golang.org + osv.dev
+│   ├── ektelog/
+│   │   └── ektelog.go         # struktureret logging til sessionsfiler
 │   ├── git/
 │   │   └── worktree.go        # Create, List, Merge, Remove worktrees
+│   ├── obs/
+│   │   └── obs.go             # observability: per-tur statistik → /observ
 │   ├── onboarding/
 │   │   └── onboarding.go      # første-kørsel guide
 │   ├── provider/
@@ -350,7 +388,11 @@ ekte/
 │   ├── session/
 │   │   └── session.go         # gem og indlæs samtaler som JSON
 │   ├── skill/
-│   │   └── skill.go           # parser markdown-skills med YAML-frontmatter
+│   │   ├── skill.go           # parser markdown-skills med YAML-frontmatter
+│   │   └── catalog.go         # SKILLeton-katalog: /skills catalog + install
+│   ├── tools/
+│   │   ├── tools.go           # LLM-tools: read/write/edit/search med sandkasse
+│   │   └── fetch.go           # /wiki-get URL-hentning med SSRF-værn
 │   ├── tui/
 │   │   ├── model.go           # Bubbletea Model — præsentationslag
 │   │   ├── update.go          # tastaturhåndtering og event-rendering
@@ -374,7 +416,8 @@ ekte/
                  │
     ┌────────────▼────────────┐
     │  internal/agent         │
-    │  Process(input) →Events │  ← al logik: slash, LLM, hooks, dep
+    │  ProcessStream(input)   │  ← al logik: slash, LLM, hooks, dep
+    │       → <-chan Event    │
     └──┬───────┬──────┬───────┘
        │       │      │
   Provider   Wiki   Git/Skills/Session/Dep
