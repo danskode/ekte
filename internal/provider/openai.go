@@ -26,20 +26,39 @@ func NewOpenAIProvider(cfg *Config) *OpenAIProvider {
 	if cfg.BaseURL != "" {
 		clientCfg.BaseURL = cfg.BaseURL
 	}
-	// Lokale LLM-servere (LM Studio m.fl.) lukker ofte holdte-i-live-forbindelser
-	// hurtigere end Go's standardtransport (IdleConnTimeout: 90s) forventer.
-	// Når Go genbruger en sådan "død" forbindelse, fejler det første byte-læs med
-	// "unexpected end of JSON input" — selvom modellen er fuldt indlæst og klar
-	// (et øjeblikkeligt retry virker altid). DisableKeepAlives fjerner hele
-	// problemklassen ved at tvinge en frisk forbindelse pr. kald — uden mærkbar
-	// pris på et lokalt loopback/LAN-link.
-	//
-	// Vi kloner DefaultTransport i stedet for at oprette en helt ny — det bevarer
-	// Proxy-fra-miljø, DialContext-timeout (30s) og TLS-handshake-timeout (10s),
-	// så forbindelsesopsætning stadig er tidsbegrænset. Vi sætter BEVIDST INGEN
-	// http.Client.Timeout: den ville afbryde selve respons-læsningen, og lokale
-	// modeller streamer ofte i flere minutter — en klient-timeout ville kappe
-	// helt normale, lange genereringer midt i strømmen.
+	// AllowLocal sættes af cmd/ekte efter interaktivt samtykke (internal/consent);
+	// env-varen er headless-override. Begge åbner for private IP'er i dial-tjekket.
+	clientCfg.HTTPClient = &http.Client{Transport: newTransport(allowLocalProvider(cfg))}
+	return &OpenAIProvider{
+		client: openai.NewClientWithConfig(clientCfg),
+		model:  cfg.Model,
+	}
+}
+
+// allowLocalProvider afgør om private/loopback provider-IP'er er tilladt —
+// via interaktivt samtykke (cfg.AllowLocal) eller headless env-override.
+func allowLocalProvider(cfg *Config) bool {
+	return cfg.AllowLocal || os.Getenv("EKTE_ALLOW_LOCAL_PROVIDER") != ""
+}
+
+// newTransport bygger HTTP-transporten til provider-kald — deles af chat-klienten
+// og ProbeLoadedContext, så IP-valideringen ikke kan glemmes ét sted.
+//
+// Lokale LLM-servere (LM Studio m.fl.) lukker ofte holdte-i-live-forbindelser
+// hurtigere end Go's standardtransport (IdleConnTimeout: 90s) forventer.
+// Når Go genbruger en sådan "død" forbindelse, fejler det første byte-læs med
+// "unexpected end of JSON input" — selvom modellen er fuldt indlæst og klar
+// (et øjeblikkeligt retry virker altid). DisableKeepAlives fjerner hele
+// problemklassen ved at tvinge en frisk forbindelse pr. kald — uden mærkbar
+// pris på et lokalt loopback/LAN-link.
+//
+// Vi kloner DefaultTransport i stedet for at oprette en helt ny — det bevarer
+// Proxy-fra-miljø, DialContext-timeout (30s) og TLS-handshake-timeout (10s),
+// så forbindelsesopsætning stadig er tidsbegrænset. Vi sætter BEVIDST INGEN
+// http.Client.Timeout her: den ville afbryde selve respons-læsningen, og lokale
+// modeller streamer ofte i flere minutter — en klient-timeout ville kappe
+// helt normale, lange genereringer midt i strømmen.
+func newTransport(allowLocal bool) *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DisableKeepAlives = true
 	// Tilføj DialContext-hook der validerer resolved IP mod private ranges
@@ -51,9 +70,6 @@ func NewOpenAIProvider(cfg *Config) *OpenAIProvider {
 	if baseDial == nil {
 		baseDial = (&net.Dialer{}).DialContext
 	}
-	// AllowLocal sættes af cmd/ekte efter interaktivt samtykke (internal/consent);
-	// env-varen er headless-override. Begge åbner for private IP'er i dial-tjekket.
-	allowLocal := cfg.AllowLocal || os.Getenv("EKTE_ALLOW_LOCAL_PROVIDER") != ""
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if allowLocal {
 			return baseDial(ctx, network, addr)
@@ -80,11 +96,7 @@ func NewOpenAIProvider(cfg *Config) *OpenAIProvider {
 		}
 		return baseDial(ctx, network, net.JoinHostPort(ips[0], port))
 	}
-	clientCfg.HTTPClient = &http.Client{Transport: tr}
-	return &OpenAIProvider{
-		client: openai.NewClientWithConfig(clientCfg),
-		model:  cfg.Model,
-	}
+	return tr
 }
 
 func (p *OpenAIProvider) Name() string { return "openai" }

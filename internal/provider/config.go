@@ -85,6 +85,10 @@ type Config struct {
 	Hooks       map[string]HookConfig `yaml:"hooks,omitempty"`
 	Containers  ContainerConfig       `yaml:"containers,omitempty"`
 	Goal        GoalConfig            `yaml:"goal,omitempty"`
+	// ExtraRoots er yderligere mapper (absolutte stier; ~ ekspanderes) hvor
+	// fil-tools må læse og skrive ud over projektmappen — fx en playground-mappe
+	// til testprojekter. Bekræftelses-flowet for skriveoperationer gælder uændret.
+	ExtraRoots []string `yaml:"extra_roots,omitempty"`
 }
 
 // UpdateProviderConfig opdaterer provider, model og base_url i en config-fil.
@@ -228,6 +232,9 @@ func MergeConfigs(global, local *Config) *Config {
 		merged.Wiki = local.Wiki
 	}
 	merged.Whitelist = local.Whitelist
+	if local.ExtraRoots != nil {
+		merged.ExtraRoots = local.ExtraRoots
+	}
 	if local.Hooks != nil {
 		merged.Hooks = local.Hooks
 	}

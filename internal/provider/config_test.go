@@ -244,3 +244,15 @@ func TestMergeConfigsContextSizeFromLocal(t *testing.T) {
 	_ = cfg
 	// Dette er en dokumentationstest — adfærden afhænger af implementeringen
 }
+
+func TestMergeConfigsExtraRoots(t *testing.T) {
+	global := &Config{ExtraRoots: []string{"/global/rod"}}
+	local := &Config{}
+	if got := MergeConfigs(global, local); len(got.ExtraRoots) != 1 || got.ExtraRoots[0] != "/global/rod" {
+		t.Errorf("global extra_roots burde bevares når lokal er tom, fik %v", got.ExtraRoots)
+	}
+	local = &Config{ExtraRoots: []string{"/lokal/rod"}}
+	if got := MergeConfigs(global, local); len(got.ExtraRoots) != 1 || got.ExtraRoots[0] != "/lokal/rod" {
+		t.Errorf("lokal extra_roots burde overskrive global, fik %v", got.ExtraRoots)
+	}
+}
