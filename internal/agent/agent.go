@@ -1632,6 +1632,25 @@ const (
 	autoSectionEnd   = "<!-- ekte:bygget:slut -->"
 )
 
+// SanitizeEkteMd saniterer den auto-genererede sektion i ekte.md når filen
+// loades som projektkontekst. Auto-sektionen er LLM-skrevet, så prompt
+// injection fra en tidligere session kunne ellers persisteres og få effekt
+// ved næste opstart (indirekte injection-persistens). Brugerens egen tekst
+// uden for markørerne røres ikke.
+func SanitizeEkteMd(content string) string {
+	i := strings.Index(content, autoSectionStart)
+	if i < 0 {
+		return content
+	}
+	j := strings.Index(content, autoSectionEnd)
+	if j < i {
+		// Manglende slutmarkør: saniter resten fra startmarkøren.
+		return content[:i] + sanitizeFileContent(content[i:])
+	}
+	auto := content[i : j+len(autoSectionEnd)]
+	return content[:i] + sanitizeFileContent(auto) + content[j+len(autoSectionEnd):]
+}
+
 // upsertAutoSection erstatter (eller tilføjer) den auto-vedligeholdte
 // byggeresumé-sektion i ekte.md — resten af filen røres ikke.
 func upsertAutoSection(existing, summary string) string {

@@ -641,7 +641,9 @@ func loadEkteMd(dir string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(data))
+	// Saniter den auto-genererede (LLM-skrevne) sektion mod persisteret
+	// prompt injection — brugerens egen tekst røres ikke.
+	return strings.TrimSpace(agent.SanitizeEkteMd(string(data)))
 }
 
 // runGoalLoop kører /goal headless: events skrives til stdout, og tool-
@@ -650,6 +652,10 @@ func loadEkteMd(dir string) string {
 func runGoalLoop(a *agent.Agent, goalText string, autoApprove bool) {
 	if !autoApprove {
 		fmt.Fprintln(os.Stderr, "⚠  headless goal uden -y: alle skriveoperationer afvises — kør med -y for at godkende automatisk")
+	} else {
+		// -y goal auto-godkender ALT, inkl. run_hook (vilkårlig kommando-
+		// eksekvering defineret i .ekte/config.yaml). Kør kun i betroede repos.
+		fmt.Fprintln(os.Stderr, "⚠  -y goal: skriveoperationer OG hooks auto-godkendes uden bekræftelse — kør kun i et repo du stoler på.")
 	}
 	ch := a.ProcessStream(context.Background(), "/goal "+goalText)
 	reached := false
