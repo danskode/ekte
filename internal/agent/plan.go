@@ -11,29 +11,28 @@ import (
 	"github.com/danskode/ekte/internal/provider"
 )
 
-const planModeSystemPrompt = `Du er i PLAN MODE — din rolle er Architect of Intent, ikke implementor.
-Dit formål er at definere hvad der tæller som succes INDEN generation begynder.
+const planModeSystemPrompt = `Du er i PLAN MODE. Du er en hjælpsom AI-assistent i ekte, et developer harness.
+Du hjælper brugeren med at eksternalisere transitive tilstande og kvalificere intent som en vellykket talehandling.
 
-Opgaver:
-1. Eksternaliser brugerens transitive tilstande (det de ved men ikke har sagt eksplicit)
-2. Kvalificér intent via Ahujas fem komponenter:
-   - Description:       hvad ønskes præcist? (propositionelt indhold)
-   - Constraints:       hvad skal være sandt? (forberedende betingelse)
-   - Failure scenarios: hvad må IKKE ske? (negativ prop. indhold — gør abuse synlig)
-   - Success scenarios: hvad tæller som done? (essentiel betingelse)
-   - Connections:       hvad else kan påvirkes? (pragmatisk baggrundsviden)
-3. Navngiv transitive tilstande eksplicit: "Jeg bemærker du antager X — er det en constraint?"
-4. Brug misfire/abuse-distinktionen: abuse er den usynlige fejl — det der gennemføres plausibelt men matcher ikke intentionen. Gør den synlig via failure scenarios.
+Rollefordeling:
+- Brugeren er Architect of Intent — IKKE dig. Du hjælper brugeren med at blive en god Architect of Intent.
+- Din rolle er AIDD-konsulent: du skaber betingelserne for at brugerens intent bliver præcis.
+- Du hjælper med AIDD-tilgangen til naturligt sprog gennem ISL og ICE.
+- AIDD er brugerens eget begreb, defineret i brugerens AI Engineering-opgave (dokumentet 00_samlet_del_1.md) — referér IKKE til wikiens definitioner af AIDD.
+
+Kvalificér intent med ICE-strukturen, ét element ad gangen:
+1. Intent — hvad skal resultatet opnå?
+2. Context — hvilke teknologier og rammer er givne?
+3. Expectations — hvad er vellykket output, og hvordan evalueres det?
 
 Regler:
-- Skriv INGEN kode og udfør INGEN filoperationer
+- Skriv INGEN kode og udfør INGEN filoperationer — i plan mode kan du kun læse og søge
 - Stil maksimalt ét spørgsmål ad gangen
 - Afslut hvert svar med et kort resumé af hvad du allerede har forstået
-- Brug brugerens egne AIDD-definitioner fra hukommelsen — ikke generiske begreber
 - Forklar hvornår du mener intent er tilstrækkeligt kvalificeret til at starte implementering
 
 Afslutning:
-Når /plan godkend køres: opsummér planen, skriv den til .ekte/plans/ og bekræft klar til implementering.`
+Når /plan godkend køres: opsummér planen, skriv den til .ekte/plans/ og bekræft klar til implementering — implementeringen sker bagefter i develop mode.`
 
 // enterPlanMode aktiverer plan mode uden startbeskrivelse — bruges af
 // /mode plan og Shift+Tab. /plan <beskrivelse> starter desuden samtalen.
@@ -47,7 +46,7 @@ func (a *Agent) enterPlanMode() []Event {
 		Role:    "system",
 		Content: planModeSystemPrompt,
 	})
-	return []Event{{Type: EventSystem, Content: "📋 Plan mode — jeg er Architect of Intent og skriver ingen kode.\nBeskriv hvad du vil bygge; /plan godkend når planen er klar. (Shift+Tab skifter tilbage til develop)"}}
+	return []Event{{Type: EventSystem, Content: "📋 Plan mode — jeg hjælper dig med at kvalificere din intent (ICE). Jeg kan kun læse og søge, ikke skrive.\nBeskriv hvad du vil bygge; /plan godkend når planen er klar. (Shift+Tab skifter tilbage til develop)"}}
 }
 
 // exitPlanMode skifter tilbage til develop uden at gemme en plan.
@@ -71,6 +70,9 @@ func (a *Agent) handlePlanGodkend(ctx context.Context, ch chan<- Event) {
 	planContent := a.buildPlanSummary()
 	ch <- Event{Type: EventSystem, Content: "📋 Plan klar til godkendelse:\n\n" + planContent + "\n"}
 
+	// Samme logning som fil-tools' confirm — så automation (og fejlsøgning)
+	// kan se at der ventes på en bekræftelse.
+	a.log().Info("tool confirm", "tool", "plan_godkend")
 	confirmCh := make(chan ConfirmResponse, 1)
 	ch <- Event{
 		Type:      EventToolConfirm,
