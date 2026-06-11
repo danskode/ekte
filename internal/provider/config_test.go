@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"path/filepath"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -254,5 +255,46 @@ func TestMergeConfigsExtraRoots(t *testing.T) {
 	local = &Config{ExtraRoots: []string{"/lokal/rod"}}
 	if got := MergeConfigs(global, local); len(got.ExtraRoots) != 1 || got.ExtraRoots[0] != "/lokal/rod" {
 		t.Errorf("lokal extra_roots burde overskrive global, fik %v", got.ExtraRoots)
+	}
+}
+
+func TestUpsertOgRemoveHook(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".ekte", "config.yaml")
+
+	// Tilføj til ikke-eksisterende fil (opretter den + .ekte/).
+	if err := UpsertHook(path, "test", "go test ./..."); err != nil {
+		t.Fatalf("UpsertHook: %v", err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil || cfg.Hooks["test"].Cmd != "go test ./..." {
+		t.Fatalf("hook ikke gemt: %v / %+v", err, cfg)
+	}
+
+	// Tilføj endnu et — det første bevares.
+	if err := UpsertHook(path, "build", "go build ./..."); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = LoadConfig(path)
+	if len(cfg.Hooks) != 2 {
+		t.Errorf("forventet 2 hooks, fik %d", len(cfg.Hooks))
+	}
+
+	// Fjern et.
+	removed, err := RemoveHook(path, "test")
+	if err != nil || !removed {
+		t.Fatalf("RemoveHook: removed=%v err=%v", removed, err)
+	}
+	cfg, _ = LoadConfig(path)
+	if _, ok := cfg.Hooks["test"]; ok {
+		t.Error("hook 'test' burde være fjernet")
+	}
+	if cfg.Hooks["build"].Cmd != "go build ./..." {
+		t.Error("hook 'build' burde bevares")
+	}
+
+	// Fjern ikke-eksisterende → removed=false, ingen fejl.
+	if removed, _ := RemoveHook(path, "findesikke"); removed {
+		t.Error("fjernelse af ukendt hook burde give removed=false")
 	}
 }

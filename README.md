@@ -194,6 +194,7 @@ Alle kommandoer skrives direkte i input-feltet.
 | Kommando | Beskrivelse |
 |---|---|
 | `/hjælp` | Vis liste over alle kommandoer |
+| `/init` | Opret `.ekte/config.yaml` + `ekte.md` i denne mappe (aktiverer fil-tools) |
 | `/skills [navn]` | Vis tilgængelige skills — angiv navn for at aktivere |
 | `/skills catalog` | Vis SKILLeton-kataloget |
 | `/skills install <navn>` | Installér en skill fra SKILLeton |
@@ -202,13 +203,16 @@ Alle kommandoer skrives direkte i input-feltet.
 | `/spec remove <navn>` | Slet worktree uden merge |
 | `/plan <beskrivelse>` | Architect of Intent mode — kvalificér intent inden implementering |
 | `/plan godkend` / `vis` / `afvis` | Gem, vis eller forkast den aktuelle plan |
-| `/goal <beskrivelse>` | Autonom mål-loop: skriv kode → byg → gentag til succes |
+| `/goal <beskrivelse>` | Autonom mål-loop: skriv kode → byg → gentag til succes (`/goal` alene viser opsætning) |
+| `ekte -y goal "<mål>"` | Kør mål-loopet headless uden TUI (kun i betroede repos) |
 | `/compress` | Komprimer kontekstvinduet — LLM laver et resumé af samtalen |
 | `/context` | Vis kontekstens lag med token-estimater |
 | `/wiki "spørgsmål"` | Søg i din personlige wiki |
 | `/wiki-get <url>` | Hent og ingest en webside i wikien |
 | `/wiki-gem <titel>` | Gem seneste `/forresten`-svar i wikien |
 | `/hook [navn]` | Vis tilgængelige hooks — angiv navn for at køre |
+| `/hook add <navn> <kommando>` | Tilføj et hook til config (uden at håndredigere YAML) |
+| `/hook fjern <navn>` | Fjern et hook fra config |
 | `/dep <modul>` | Sikkerhedsscore for én Go-afhængighed |
 | `/sec-check` | Scan alle afhængigheder i projektet + ekte-harness |
 | `/security` | Vis sikkerhedsstatus, whitelist og guardrails |

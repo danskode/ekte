@@ -69,15 +69,27 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 		if arg == "" {
 			return a.handleHookList()
 		}
+		// /hook add <navn> <kommando> og /hook fjern <navn> redigerer config —
+		// brugerens eget eksplicitte valg (ingen LLM), så ingen harness-confirm.
+		fields := strings.Fields(arg)
+		if fields[0] == "add" || fields[0] == "tilføj" {
+			return a.handleHookAdd(fields[1:])
+		}
+		if fields[0] == "fjern" || fields[0] == "remove" || fields[0] == "slet" {
+			return a.handleHookRemove(fields[1:])
+		}
 		if !a.cfg.Whitelist.HookRun {
 			return []Event{{Type: EventSystem, Content: denyMsg("hook_run")}}
 		}
 		return a.handleHook(ctx, arg)
 
+	case "/init":
+		return a.handleInit()
+
 	case "/goal":
 		// streamGoal kræver en kanal — her samles events synkront via en buffer-kanal.
 		if arg == "" {
-			return []Event{{Type: EventSystem, Content: "Brug: /goal <beskrivelse af målet>"}}
+			return []Event{{Type: EventSystem, Content: a.goalHelp()}}
 		}
 		bufCh := make(chan Event, 512)
 		go func() {
@@ -903,7 +915,10 @@ var builtinCommands = [][2]string{
 	{"/wiki \"spørgsmål\"", "søg i simple-minded (lokalt videnslager)"},
 	{"/wiki-get <url>", "hent og ingest en webside i simple-minded"},
 	{"/wiki-gem <titel>", "gem seneste /forresten-svar i wikien"},
+	{"/init", "opret .ekte/config.yaml + ekte.md i denne mappe"},
 	{"/hook [navn]", "vis hooks — angiv navn for at køre"},
+	{"/hook add <navn> <kommando>", "tilføj et hook til config"},
+	{"/hook fjern <navn>", "fjern et hook fra config"},
 	{"/goal <beskrivelse>", "autonom mål-loop: skriv kode → byg → gentag til succes"},
 	{"/dep <modul>", "sikkerhedsscore for én Go-afhængighed"},
 	{"/sec-check", "scan alle afhængigheder + ekte-harness"},

@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -271,5 +273,96 @@ func TestSanitizeEkteMd(t *testing.T) {
 	plain := "# Bare en PRD\n\nByg noget fedt."
 	if SanitizeEkteMd(plain) != plain {
 		t.Error("fil uden auto-sektion burde være uændret")
+	}
+}
+
+// TestInitOgHookAdd: /init scaffolder config + ekte.md og aktiverer fil-tools;
+// /hook add gemmer et hook i config og in-memory.
+func TestInitOgHookAdd(t *testing.T) {
+	dir := t.TempDir()
+	a := New(Config{
+		WorkDir:         dir,
+		LocalConfigPath: filepath.Join(dir, ".ekte", "config.yaml"),
+	})
+
+	evs := a.Process(context.Background(), "/init")
+	if len(evs) == 0 || !strings.Contains(evs[0].Content, "Initialiseret") {
+		t.Fatalf("/init burde scaffolde, fik: %+v", evs)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".ekte", "config.yaml")); err != nil {
+		t.Error("config.yaml blev ikke oprettet")
+	}
+	if !a.cfg.Whitelist.FileWrite {
+		t.Error("/init burde aktivere file_write in-memory")
+	}
+
+	evs = a.Process(context.Background(), "/hook add test go test ./...")
+	if len(evs) == 0 || !strings.Contains(evs[0].Content, "gemt") {
+		t.Fatalf("/hook add burde gemme, fik: %+v", evs)
+	}
+	if a.cfg.Hooks["test"].Cmd != "go test ./..." {
+		t.Errorf("hook ikke i in-memory cfg: %+v", a.cfg.Hooks)
+	}
+	cfg, _ := provider.LoadConfig(filepath.Join(dir, ".ekte", "config.yaml"))
+	if cfg.Hooks["test"].Cmd != "go test ./..." {
+		t.Error("hook ikke persisteret til config")
+	}
+
+	// /hook fjern
+	evs = a.Process(context.Background(), "/hook fjern test")
+	if len(evs) == 0 || !strings.Contains(evs[0].Content, "fjernet") {
+		t.Errorf("/hook fjern burde virke, fik: %+v", evs)
+	}
+	if _, ok := a.cfg.Hooks["test"]; ok {
+		t.Error("hook ikke fjernet in-memory")
+	}
+}
+
+func TestIsNetworkErr(t *testing.T) {
+	netværk := []string{
+		"Post \"http://x/v1\": dial tcp: connection refused",
+		"read tcp: connection reset by peer",
+		"net/http: TLS handshake timeout",
+		"unexpected EOF",
+		"context deadline exceeded",
+	}
+	for _, s := range netværk {
+		if !isNetworkErr(s) {
+			t.Errorf("burde genkendes som netværksfejl: %q", s)
+		}
+	}
+	if isNetworkErr("400 Bad Request: model not found") {
+		t.Error("applikationsfejl burde IKKE være netværksfejl")
+	}
+	// explainStreamErr giver genoptag-besked ved netværksfejl.
+	msg := explainStreamErr(fmt.Errorf("dial tcp: connection refused"), 1000)
+	if !strings.Contains(msg, "fortsæt") {
+		t.Errorf("netværksfejl burde give genoptag-besked, fik: %s", msg)
+	}
+}
+
+func TestDetectProjectDir(t *testing.T) {
+	// Build-fil i roden → roden.
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "pom.xml"), []byte("<p/>"), 0644)
+	if got := detectProjectDir(root); got != root {
+		t.Errorf("rod med pom.xml: forventet %s, fik %s", root, got)
+	}
+
+	// Build-fil i én undermappe → undermappen.
+	root2 := t.TempDir()
+	sub := filepath.Join(root2, "app")
+	os.MkdirAll(sub, 0755)
+	os.WriteFile(filepath.Join(sub, "go.mod"), []byte("module x"), 0644)
+	if got := detectProjectDir(root2); got != sub {
+		t.Errorf("undermappe-projekt: forventet %s, fik %s", sub, got)
+	}
+
+	// To kandidater → roden (gæt ikke).
+	sub2 := filepath.Join(root2, "app2")
+	os.MkdirAll(sub2, 0755)
+	os.WriteFile(filepath.Join(sub2, "package.json"), []byte("{}"), 0644)
+	if got := detectProjectDir(root2); got != root2 {
+		t.Errorf("tvetydigt: forventet roden %s, fik %s", root2, got)
 	}
 }

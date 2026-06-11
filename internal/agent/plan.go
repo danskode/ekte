@@ -106,7 +106,19 @@ func (a *Agent) handlePlanGodkend(ctx context.Context, ch chan<- Event) {
 		Content: "[Plan godkendt — implementering kan starte]\n" + planContent,
 	})
 	ch <- Event{Type: EventSystem, Content: fmt.Sprintf("✓ Plan godkendt og gemt: %s\nPlan mode afsluttet — implementering kan starte.", planPath)}
-	ch <- Event{Type: EventSystem, Content: "Vil du sætte et succeskriterie for opgaven? Skriv '/goal <hook-navn>' eller fortsæt manuelt."}
+	// Hjælp brugeren videre til udførelsesfasen — og opdag hvis der mangler et
+	// goal/check_hook, så man ikke står stranded efter godkendelsen.
+	if a.cfg.Goal.CheckHook != "" {
+		if _, ok := a.cfg.Hooks[a.cfg.Goal.CheckHook]; ok {
+			ch <- Event{Type: EventSystem, Content: fmt.Sprintf("Klar til autonom udførelse: skriv /goal <beskrivelse> — tjekkes med hooket '%s'.\nEller beskriv bare næste skridt, så bygger vi manuelt.", a.cfg.Goal.CheckHook)}
+			return
+		}
+	}
+	ch <- Event{Type: EventSystem, Content: "Vil du køre opgaven autonomt med /goal? Det kræver et succes-tjek (check_hook).\n" +
+		"Sæt et hurtigt op:\n" +
+		"  /hook add compile mvn -q compile     (eller: go build ./..., npm run build)\n" +
+		"  /hook add goalcheck ekte springcheck (Java + Thymeleaf: tjekker sider/endpoints)\n" +
+		"Tilføj så goal.check_hook i .ekte/config.yaml. Eller beskriv bare næste skridt, så bygger vi manuelt."}
 }
 
 func (a *Agent) handlePlan(ctx context.Context, arg string) []Event {

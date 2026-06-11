@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -111,6 +112,58 @@ func UpdateProviderConfig(path, prov, model, baseURL string) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0600)
+}
+
+// UpsertHook tilføjer eller opdaterer en hook (navn → kommando) i config-filen.
+// Bevarer alle øvrige felter. Kun streng-form-hooks (uden container) — det er
+// hvad /hook add understøtter; container-hooks redigeres i YAML.
+func UpsertHook(path, name, cmd string) error {
+	raw := map[string]any{}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = yaml.Unmarshal(data, &raw)
+	}
+	hooks, _ := raw["hooks"].(map[string]any)
+	if hooks == nil {
+		hooks = map[string]any{}
+	}
+	hooks[name] = cmd
+	raw["hooks"] = hooks
+	data, err := yaml.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
+}
+
+// RemoveHook fjerner en hook fra config-filen. Returnerer false hvis den ikke fandtes.
+func RemoveHook(path, name string) (bool, error) {
+	raw := map[string]any{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	_ = yaml.Unmarshal(data, &raw)
+	hooks, _ := raw["hooks"].(map[string]any)
+	if hooks == nil {
+		return false, nil
+	}
+	if _, ok := hooks[name]; !ok {
+		return false, nil
+	}
+	delete(hooks, name)
+	if len(hooks) == 0 {
+		delete(raw, "hooks")
+	} else {
+		raw["hooks"] = hooks
+	}
+	out, err := yaml.Marshal(raw)
+	if err != nil {
+		return false, err
+	}
+	return true, os.WriteFile(path, out, 0600)
 }
 
 // UpdateContextSize opdaterer context_size i config-fil. size=0 sletter nøglen.
