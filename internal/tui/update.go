@@ -137,7 +137,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ready = true
 			m.conversation.SetContent(m.conversationContent())
 			m.conversation.GotoBottom()
-			return m, initMdCmd(msg.Width - 6)
+			m.mdWidth = m.conversationWidth() - 2
+			return m, initMdCmd(m.mdWidth)
 		} else {
 			m.conversation.Width = msg.Width - 4
 			m.conversation.Height = msg.Height - 10
@@ -147,7 +148,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toolPanel.SetContent(wordWrap(m.toolOutput, m.toolPanelWidth()-4))
 			}
 			m.input.SetWidth(msg.Width - 4)
-			return m, initMdCmd(msg.Width - 6)
+			m.mdWidth = m.conversationWidth() - 2
+			return m, initMdCmd(m.mdWidth)
 		}
 
 	case msgMdReady:
@@ -328,6 +330,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.toolOutput != "" {
 				m.toolOutput = ""
+				m.toolLog = ""
 				return m, nil
 			}
 
@@ -472,8 +475,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.conversation.GotoBottom()
 
 		case agent.EventReasoningToken:
-			// Stream modellens "tanker" live ind i sidepanelet — det erstattes
-			// automatisk af tool-output, hvis/når modellen begynder at kalde tools.
+			// Stream modellens "tanker" live ind i sidepanelet — panelet gives
+			// tilbage til tool-loggen (restoreToolLog) så snart svaret begynder.
 			m.reasoningBuf += msg.Content
 			m.toolOutput = "🧠 " + m.reasoningBuf
 			m.toolPanel.SetContent(wordWrap(m.toolOutput, m.toolPanelWidth()-4))
@@ -482,6 +485,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case agent.EventStreamToken:
 			m.thinking = false
+			m.restoreToolLog() // tankerne er slut — giv panelet tilbage til tool-loggen
 			m.streamBuf += msg.Content
 			m.conversation.SetContent(m.conversationContent())
 			m.conversation.GotoBottom()
@@ -490,6 +494,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case agent.EventStreamDone:
 			m.streaming = false
 			m.thinking = false
+			m.restoreToolLog() // svar uden tokens (fx rene tool-runder) skal også rydde tankerne
 			m.streamBuf = ""
 			m.streamCh = nil
 			if msg.Content != "" {
@@ -563,6 +568,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case agent.EventToolOutput:
 			m.streamBuf = ""
 			m.toolOutput = msg.Content
+			m.toolLog = msg.Content
 			m.toolPanel.SetContent(wordWrap(msg.Content, m.toolPanelWidth()-4))
 
 		case agent.EventQuit:
@@ -594,6 +600,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var toolCmd tea.Cmd
 		m.toolPanel, toolCmd = m.toolPanel.Update(msg)
 		cmds = append(cmds, toolCmd)
+	}
+
+	// Sidepanelet kan have åbnet/lukket sig siden sidste render — følg samtalens
+	// aktuelle bredde, ellers wrapper glamour til den gamle og output klippes.
+	if m.ready {
+		if w := m.conversationWidth() - 2; w > 0 && w != m.mdWidth {
+			m.mdWidth = w
+			cmds = append(cmds, initMdCmd(w))
+		}
 	}
 
 	if wasStreaming && !m.streaming {

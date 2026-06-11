@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -35,6 +36,11 @@ type Model struct {
 
 	messages   []provider.Message
 	toolOutput string
+	// toolLog er seneste tool-output uafhængigt af hvad panelet viser lige nu —
+	// reasoning-streaming låner panelet (EventReasoningToken) og uden denne
+	// kopi var tool-loggen tabt for altid når modellens tanker overskrev den.
+	toolLog string
+	workDir string // vises i statuslinjen så brugeren kan se hvor ekte arbejder
 
 	history           []string
 	historyIdx        int
@@ -47,6 +53,10 @@ type Model struct {
 	userName         string
 	agentName        string
 	mdRenderer       *glamour.TermRenderer
+	// mdWidth er den wrap-bredde mdRenderer senest blev bygget med. Samtalens
+	// bredde ændrer sig når sidepanelet åbner/lukker — wrapper rendereren til
+	// den gamle bredde, klippes linjerne midt i ANSI-koderne og ligner rå tekst.
+	mdWidth int
 
 	suggestions   []string
 	suggestionIdx int
@@ -120,6 +130,28 @@ func (m *Model) SetMaxTokens(n int) {
 
 // SetModelName sætter modelnavnet til statuslinjen (sættes ved opstart;
 // opdateres derefter via EventModelInfo når /model skifter model).
+// restoreToolLog giver sidepanelet tilbage til seneste tool-output efter at
+// reasoning-streaming har lånt det til modellens tanker. No-op uden tanker.
+// Var tool-loggen tom lukker panelet — som før reasoning-visningen fandtes.
+func (m *Model) restoreToolLog() {
+	if m.reasoningBuf == "" {
+		return
+	}
+	m.reasoningBuf = ""
+	m.toolOutput = m.toolLog
+	if m.toolLog != "" {
+		m.toolPanel.SetContent(wordWrap(m.toolLog, m.toolPanelWidth()-4))
+	}
+}
+
+// SetWorkDir sætter arbejdsmappen til statuslinjen — hjemmemappen forkortes til ~.
+func (m *Model) SetWorkDir(dir string) {
+	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(dir, home) {
+		dir = "~" + strings.TrimPrefix(dir, home)
+	}
+	m.workDir = dir
+}
+
 func (m *Model) SetModelName(name string) {
 	m.modelName = name
 }
@@ -394,6 +426,16 @@ func (m Model) statusBar() string {
 		modeIndicator = "  " + styleSlashCmd.Render("mode:"+m.agent.WorkMode())
 	}
 
+	dirIndicator := ""
+	if m.workDir != "" {
+		// Afkort forfra — det er stiens sidste led der fortæller hvor man arbejder.
+		dir := []rune(m.workDir)
+		if len(dir) > 32 {
+			dir = append([]rune("…"), dir[len(dir)-31:]...)
+		}
+		dirIndicator = "  " + styleSystem.Render("📁 "+string(dir))
+	}
+
 	skillIndicator := ""
 	if m.agent != nil && m.agent.ActiveSkill() != nil {
 		skillIndicator = "  " + styleSlashCmd.Render("skill:"+m.agent.ActiveSkill().Name)
@@ -411,7 +453,7 @@ func (m Model) statusBar() string {
 		right = styleStatusBar.Render(styleSystem.Render("PgUp/PgDn: scrol · Ctrl+Y: kopiér " + soundIcon + " · /hjælp"))
 	}
 
-	left := styleStatusBar.Render(ctxStyled + modelIndicator + modeIndicator + skillIndicator)
+	left := styleStatusBar.Render(ctxStyled + modelIndicator + modeIndicator + dirIndicator + skillIndicator)
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0
