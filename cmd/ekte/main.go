@@ -167,7 +167,11 @@ func runTUI(sessionArg string, autoApprove bool, headlessGoal string) {
 		hooks = cfg.Hooks
 		containers = cfg.Containers
 		goal = cfg.Goal
-		extraRoots = tools.NormalizeExtraRoots(cfg.ExtraRoots)
+		// extra_roots fra den GLOBALE config er betroet (brugerens egen maskine).
+		// extra_roots fra den projekt-lokale config kan komme fra et klonet,
+		// ondsindet repo (CWE-668) — hver ny rod kræver derfor eksplicit
+		// interaktivt samtykke, gemt globalt (analogt med private base_url'er).
+		extraRoots = resolveExtraRoots(globalCfg, localCfg, globalDir)
 	}
 	if autoApprove {
 		whitelist.AutoApprove = true
@@ -406,6 +410,69 @@ func promptProfile() ekteProfile {
 
 // promptLocalProviderConsent viser opstartsdialogen for en privat provider-URL
 // — i stil med onboardingens tillidstrin. Returnerer true ved 'j'.
+// resolveExtraRoots samler de tilladte fil-rødder uden for projektmappen.
+// Globale rødder er betroede; lokale (fra projekt-config) gates med samtykke
+// — env-override (EKTE_ALLOW_LOCAL_PROVIDER) eller tidligere/ny godkendelse.
+// Ikke-godkendte lokale rødder udelades stille, så ekte stadig kan starte.
+func resolveExtraRoots(globalCfg, localCfg *provider.Config, globalDir string) []string {
+	var roots []string
+	seen := map[string]bool{}
+	add := func(r string) {
+		if !seen[r] {
+			seen[r] = true
+			roots = append(roots, r)
+		}
+	}
+	if globalCfg != nil {
+		for _, r := range tools.NormalizeExtraRoots(globalCfg.ExtraRoots) {
+			add(r)
+		}
+	}
+	if localCfg == nil {
+		return roots
+	}
+	for _, r := range tools.NormalizeExtraRoots(localCfg.ExtraRoots) {
+		if seen[r] {
+			continue // allerede betroet via global config
+		}
+		switch {
+		case consent.EnvOverride() || consent.GrantedRoot(globalDir, r):
+			add(r)
+		case promptExtraRootConsent(r):
+			if err := consent.GrantRoot(globalDir, r); err != nil {
+				fmt.Fprintf(os.Stderr, "advarsel: kunne ikke gemme samtykke for %s: %v\n", r, err)
+			}
+			add(r)
+		default:
+			fmt.Fprintf(os.Stderr, "ℹ extra_root %s ikke godkendt — udeladt (fil-adgang forbliver i projektmappen).\n", r)
+		}
+	}
+	return roots
+}
+
+// promptExtraRootConsent beder om bekræftelse på en projekt-lokal extra_root —
+// den udvider LLM'ens fil-sandkasse uden for projektmappen, så en ubetroet
+// config ikke må give sig selv adgangen.
+func promptExtraRootConsent(root string) bool {
+	bold := "\033[1m"
+	reset := "\033[0m"
+	dim := "\033[2m"
+
+	fmt.Println()
+	fmt.Printf("%s⚠  Udvidet fil-adgang%s\n", bold, reset)
+	fmt.Println(strings.Repeat("─", 48))
+	fmt.Println()
+	fmt.Printf("Projektets config beder om læse/skrive-adgang uden for projektmappen:\n  %s%s%s\n", bold, root, reset)
+	fmt.Printf("%sGodkend kun hvis du stoler på dette projekt og selv ønsker adgangen.%s\n", dim, reset)
+	fmt.Println()
+	fmt.Printf("Tillad? [j/n] > ")
+
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "j" || answer == "ja" || answer == "y" || answer == "yes"
+}
+
 func promptLocalProviderConsent(baseURL string) bool {
 	bold := "\033[1m"
 	reset := "\033[0m"

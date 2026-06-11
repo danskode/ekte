@@ -1680,8 +1680,15 @@ func (a *Agent) persistGoalSummary(ctx context.Context, goalDesc string, ch chan
 	updated := upsertAutoSection(existing, summary)
 
 	// ekte.md er en harness-fil: skrivning kræver ALTID eksplicit bekræftelse.
+	// Vis resuméets indhold (afkortet) i dialogen — det loades som betroet
+	// kontekst i fremtidige sessioner, så brugeren skal kunne se hvad der
+	// persisteres (forsvar mod persisteret prompt injection).
+	preview := summary
+	if len(preview) > 1000 {
+		preview = preview[:1000] + "\n… [afkortet]"
+	}
 	confirmCh := make(chan ConfirmResponse, 1)
-	ch <- Event{Type: EventToolConfirm, Content: fmt.Sprintf("skriv byggeresumé til ekte.md (auto-sektion, %d tegn)", len(summary)), ConfirmCh: confirmCh}
+	ch <- Event{Type: EventToolConfirm, Content: "skriv byggeresumé til ekte.md (loades som projektkontekst fremover):\n\n" + preview, ConfirmCh: confirmCh}
 	select {
 	case r := <-confirmCh:
 		if !r.Approved {

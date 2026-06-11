@@ -30,6 +30,7 @@ type record struct {
 
 type consentFile struct {
 	LocalProviders []record `yaml:"local_providers"`
+	ExtraRoots     []record `yaml:"extra_roots"`
 }
 
 // EnvOverride returnerer true hvis EKTE_ALLOW_LOCAL_PROVIDER er sat —
@@ -101,6 +102,47 @@ func Grant(globalDir, baseURL string) error {
 	}
 	f := load(globalDir)
 	f.LocalProviders = append(f.LocalProviders, record{
+		URL:     target,
+		Granted: time.Now().Format("2006-01-02"),
+	})
+	data, err := yaml.Marshal(f)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(globalDir, 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(path(globalDir), data, 0600)
+}
+
+// GrantedRoot returnerer true hvis brugeren tidligere har godkendt præcis denne
+// extra_root. Bruges til at gate projekt-lokale extra_roots: en klonet config
+// kan udvide fil-sandkassen til mapper uden for projektet, så hver ny rod fra
+// lokal config kræver eksplicit interaktivt samtykke (gemt globalt).
+func GrantedRoot(globalDir, root string) bool {
+	target := strings.TrimSpace(root)
+	if target == "" {
+		return false
+	}
+	for _, r := range load(globalDir).ExtraRoots {
+		if strings.TrimSpace(r.URL) == target {
+			return true
+		}
+	}
+	return false
+}
+
+// GrantRoot gemmer samtykke for præcis denne extra_root. Idempotent.
+func GrantRoot(globalDir, root string) error {
+	target := strings.TrimSpace(root)
+	if target == "" {
+		return nil
+	}
+	if GrantedRoot(globalDir, target) {
+		return nil
+	}
+	f := load(globalDir)
+	f.ExtraRoots = append(f.ExtraRoots, record{
 		URL:     target,
 		Granted: time.Now().Format("2006-01-02"),
 	})

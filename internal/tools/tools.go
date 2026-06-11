@@ -257,6 +257,61 @@ func resolveSafeFile(root, path string, extraRoots []string) (string, error) {
 	return resolved, nil
 }
 
+// underAnyRoot rapporterer om resolved ligger under root eller en af extraRoots.
+func underAnyRoot(resolved, root string, extraRoots []string) bool {
+	if underRoot(resolved, root) {
+		return true
+	}
+	for _, er := range extraRoots {
+		if underRoot(resolved, er) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveSafeWritePath validerer en SKRIVESTI mod samme sandkasse-grænse som
+// læsning: et symlink inde i projektet/extra_roots (fx plantet af et klonet
+// repo) der peger på ~/.bashrc eller ~/.ssh/authorized_keys må ikke kunne
+// skrives igennem (CWE-59, CWE-22). Da målet ofte endnu ikke findes (ny fil
+// eller mappe), opløses symlinks på den NÆRMESTE EKSISTERENDE forælder, og den
+// ikke-eksisterende hale føjes på igen; resultatet skal stadig ligge under en
+// tilladt rod. isSensitivePath håndhæves også her, så bloklisten ikke kun
+// gælder læsning.
+func resolveSafeWritePath(root, path string, extraRoots []string) (string, error) {
+	abs, err := safePath(root, path, extraRoots)
+	if err != nil {
+		return "", err
+	}
+	// Find nærmeste eksisterende forælder og opløs dens symlinks.
+	dir := abs
+	var tail []string
+	for {
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			resolved := filepath.Join(append([]string{real}, tail...)...)
+			if !underAnyRoot(resolved, root, extraRoots) {
+				return "", fmt.Errorf("sti ikke tilladt: %s (symlink peger uden for projektmappen)", path)
+			}
+			if isSensitivePath(resolved) {
+				return "", fmt.Errorf("skrivning til %s er ikke tilladt", path)
+			}
+			return resolved, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // nåede roden uden en eksisterende forælder
+		}
+		tail = append([]string{filepath.Base(dir)}, tail...)
+		dir = parent
+	}
+	// Ingen eksisterende forælder kunne opløses — fald tilbage til den
+	// lexiske sti (safePath har allerede verificeret at den er under en rod).
+	if isSensitivePath(abs) {
+		return "", fmt.Errorf("skrivning til %s er ikke tilladt", path)
+	}
+	return abs, nil
+}
+
 func readFile(args map[string]any, root string, extraRoots []string) (string, error) {
 	path, _ := args["path"].(string)
 	if path == "" {
@@ -429,7 +484,7 @@ func writeFile(args map[string]any, root string, extraRoots []string) (string, e
 	if path == "" {
 		return "", fmt.Errorf("path mangler")
 	}
-	abs, err := safePath(root, path, extraRoots)
+	abs, err := resolveSafeWritePath(root, path, extraRoots)
 	if err != nil {
 		return "", err
 	}
@@ -462,7 +517,7 @@ func editFile(args map[string]any, root string, extraRoots []string) (string, er
 	if oldStr == "" && insertAfter == "" {
 		return "", fmt.Errorf("old_string eller insert_after mangler")
 	}
-	abs, err := safePath(root, path, extraRoots)
+	abs, err := resolveSafeWritePath(root, path, extraRoots)
 	if err != nil {
 		return "", err
 	}
@@ -510,7 +565,7 @@ func createDir(args map[string]any, root string, extraRoots []string) (string, e
 	if path == "" {
 		return "", fmt.Errorf("path mangler")
 	}
-	abs, err := safePath(root, path, extraRoots)
+	abs, err := resolveSafeWritePath(root, path, extraRoots)
 	if err != nil {
 		return "", err
 	}
@@ -565,9 +620,38 @@ func safePath(root, rel string, extraRoots []string) (string, error) {
 	return abs, nil
 }
 
+// sensitiveRootNames er mappenavne der ALDRIG må blive en extra_root — heller
+// ikke via en projekt-lokal config fra et klonet, ondsindet repo (CWE-668).
+// En extra_root der peger på (eller indeholder) en af disse ville udvide
+// LLM'ens fil-sandkasse til legitimationsoplysninger og nøgler.
+var sensitiveRootNames = []string{
+	".ssh", ".aws", ".gnupg", ".gcloud", ".azure", ".kube", ".docker",
+	".config", ".ekte", ".gem", ".npm", ".cargo", ".password-store",
+}
+
+// rootIsSensitive rapporterer om abs er, ligger under, eller direkte indeholder
+// en kendt følsom mappe i hjemmemappen.
+func rootIsSensitive(abs, home string) bool {
+	if home == "" {
+		return false
+	}
+	home = filepath.Clean(home)
+	for _, name := range sensitiveRootNames {
+		sens := filepath.Join(home, name)
+		// abs ER den følsomme mappe, eller ligger UNDER den (peger ind i den),
+		// eller er en forælder der INDEHOLDER den (fx hjemmemappen selv via ~).
+		if abs == sens || underRoot(abs, sens) || underRoot(sens, abs) {
+			return true
+		}
+	}
+	return false
+}
+
 // NormalizeExtraRoots forbereder config-værdien extra_roots til brug i safePath:
 // ~ ekspanderes, stier renses, og farlige rødder frasorteres — "/" eller
-// hjemmemappen selv ville reelt ophæve sandkassen.
+// hjemmemappen selv ville reelt ophæve sandkassen, og kendte følsomme mapper
+// (~/.ssh, ~/.aws, ...) afvises så en ubetroet lokal config ikke kan udvide
+// sandkassen til legitimationsoplysninger.
 func NormalizeExtraRoots(roots []string) []string {
 	home, _ := os.UserHomeDir()
 	var out []string
@@ -580,6 +664,9 @@ func NormalizeExtraRoots(roots []string) []string {
 		}
 		r = filepath.Clean(r)
 		if !filepath.IsAbs(r) || r == "/" || (home != "" && r == filepath.Clean(home)) {
+			continue
+		}
+		if rootIsSensitive(r, home) {
 			continue
 		}
 		out = append(out, r)

@@ -127,15 +127,19 @@ func Run(ctx context.Context, dir string, login string) Report {
 		return Report{OK: false, Lines: lines}
 	}
 
-	url := fmt.Sprintf("http://%s:%d", localIP(), port)
-	return Report{
-		OK:  true,
-		URL: url,
-		Lines: []string{
-			fmt.Sprintf("✓ compile OK, %d sider/endpoints tjekket — ingen Whitelabel-fejl eller døde links.", visited),
-			"Projektet kan tilgås på: " + url,
-		},
+	// localhost er den primære, sikre adresse — tjekket talte selv kun med
+	// 127.0.0.1. LAN-adressen vises kun som sekundær med en advarsel: en
+	// Spring-app binder typisk 0.0.0.0, og med default-credentials (admin/admin)
+	// bør brugeren ikke opfordres til at eksponere en utestet dev-app på nettet.
+	localURL := fmt.Sprintf("http://localhost:%d", port)
+	lines := []string{
+		fmt.Sprintf("✓ compile OK, %d sider/endpoints tjekket — ingen Whitelabel-fejl eller døde links.", visited),
+		"Projektet kan tilgås på: " + localURL,
 	}
+	if lan := localIP(); lan != "localhost" {
+		lines = append(lines, fmt.Sprintf("(På LAN: http://%s:%d — kun til betroet netværk; appen er ikke sikkerhedstestet.)", lan, port))
+	}
+	return Report{OK: true, URL: localURL, Lines: lines}
 }
 
 func fail(msg string) Report { return Report{OK: false, Lines: []string{msg}} }

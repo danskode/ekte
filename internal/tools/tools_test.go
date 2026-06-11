@@ -427,3 +427,70 @@ func TestDefinitionsNaevnerExtraRoots(t *testing.T) {
 		t.Error("write_file's path-beskrivelse burde nævne extra_roots")
 	}
 }
+
+func TestNormalizeExtraRootsFølsommeAfvises(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("ingen hjemmemappe")
+	}
+	got := NormalizeExtraRoots([]string{
+		"~/.ssh",                      // direkte følsom
+		"~/.aws/credentials",          // under følsom
+		"~/.config",                   // følsom (bredt)
+		home,                          // hjemmemappen selv (indeholder følsomme)
+		"~/projekter/ekte-playground", // OK
+		"/tmp/ekte-test",              // OK
+	})
+	want := map[string]bool{
+		filepath.Join(home, "projekter", "ekte-playground"): true,
+		"/tmp/ekte-test": true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("forventet %v, fik %v", want, got)
+	}
+	for _, r := range got {
+		if !want[r] {
+			t.Errorf("følsom/uventet rod sluppet igennem: %s", r)
+		}
+	}
+}
+
+func TestWriteFileSymlinkEscapeAfvises(t *testing.T) {
+	root, outside := projRoot(t)
+	// Symlink inde i projektet der peger på en fil udenfor — skrivning via
+	// linket må afvises (CWE-59), præcis som læsning.
+	link := filepath.Join(root, "genvej.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink ikke understøttet: %v", err)
+	}
+	_, err := Execute(call("write_file", `{"path":"genvej.txt","content":"hacked"}`), root, true, true, nil)
+	if err == nil {
+		t.Error("write_file via symlink ud af projektmappen burde afvises")
+	}
+	if data, _ := os.ReadFile(outside); string(data) == "hacked" {
+		t.Fatal("filen udenfor blev overskrevet via symlink!")
+	}
+
+	// Symlinket KATALOG: ny fil under et symlinket dir der peger udenfor.
+	base := filepath.Dir(outside)
+	dirlink := filepath.Join(root, "udir")
+	if err := os.Symlink(base, dirlink); err != nil {
+		t.Skipf("symlink ikke understøttet: %v", err)
+	}
+	_, err = Execute(call("write_file", `{"path":"udir/ny.txt","content":"x"}`), root, true, true, nil)
+	if err == nil {
+		t.Error("write_file under symlinket katalog ud af projektet burde afvises")
+	}
+}
+
+func TestEditFileSensitivAfvises(t *testing.T) {
+	root := t.TempDir()
+	// En .env-fil inde i projektet må ikke kunne redigeres (blokliste gælder nu også skrivning).
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("SECRET=1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Execute(call("edit_file", `{"path":".env","old_string":"SECRET=1","new_string":"SECRET=2"}`), root, true, true, nil)
+	if err == nil {
+		t.Error("edit_file på .env burde afvises af bloklisten")
+	}
+}
