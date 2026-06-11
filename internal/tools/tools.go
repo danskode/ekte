@@ -12,7 +12,14 @@ import (
 
 // Definitions returnerer tool-definitioner til brug i LLM-kald.
 // canWrite styrer om write_file, edit_file og create_dir er inkluderet.
-func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
+// extraRoots nævnes i sti-beskrivelserne, så modellen ved hvor absolutte
+// stier er tilladt — uden den viden kan den ikke følge regler om at
+// oprette filer uden for projektmappen (fx en playground-mappe).
+func Definitions(canRead, canWrite bool, extraRoots []string) []provider.ToolDefinition {
+	extraDesc := ""
+	if len(extraRoots) > 0 {
+		extraDesc = " — eller en absolut sti under: " + strings.Join(extraRoots, ", ")
+	}
 	var defs []provider.ToolDefinition
 	if canRead {
 		defs = append(defs,
@@ -24,7 +31,7 @@ func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
 					"properties": map[string]any{
 						"path": map[string]any{
 							"type":        "string",
-							"description": "Filsti relativ til projektmappen",
+							"description": "Filsti relativ til projektmappen" + extraDesc,
 						},
 					},
 					"required": []string{"path"},
@@ -59,7 +66,7 @@ func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
 					"properties": map[string]any{
 						"path": map[string]any{
 							"type":        "string",
-							"description": "Mappesti relativ til projektmappen ('.' = rod, '.ekte/skills' = skills-mappe)",
+							"description": "Mappesti relativ til projektmappen ('.' = rod, '.ekte/skills' = skills-mappe)" + extraDesc,
 						},
 					},
 					"required": []string{"path"},
@@ -77,7 +84,7 @@ func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
 					"properties": map[string]any{
 						"path": map[string]any{
 							"type":        "string",
-							"description": "Filsti relativ til projektmappen",
+							"description": "Filsti relativ til projektmappen" + extraDesc,
 						},
 						"content": map[string]any{
 							"type":        "string",
@@ -98,7 +105,7 @@ func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
 					"properties": map[string]any{
 						"path": map[string]any{
 							"type":        "string",
-							"description": "Filsti relativ til projektmappen",
+							"description": "Filsti relativ til projektmappen" + extraDesc,
 						},
 						"old_string": map[string]any{
 							"type":        "string",
@@ -124,7 +131,7 @@ func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
 					"properties": map[string]any{
 						"path": map[string]any{
 							"type":        "string",
-							"description": "Mappesti relativ til projektmappen",
+							"description": "Mappesti relativ til projektmappen" + extraDesc,
 						},
 					},
 					"required": []string{"path"},
@@ -137,7 +144,9 @@ func Definitions(canRead, canWrite bool) []provider.ToolDefinition {
 
 // Execute udfører et tool call og returnerer resultatet som streng.
 // root er den absolutte projektmappe — alle stier er relative til den.
-func Execute(call provider.ToolCall, root string, canRead, canWrite bool) (string, error) {
+// extraRoots er yderligere absolutte rødder (fra config'ens extra_roots,
+// normaliseret via NormalizeExtraRoots) hvor filoperationer også er tilladt.
+func Execute(call provider.ToolCall, root string, canRead, canWrite bool, extraRoots []string) (string, error) {
 	var args map[string]any
 	if err := json.Unmarshal(call.Input, &args); err != nil {
 		return "", fmt.Errorf("ugyldige argumenter: %w", err)
@@ -148,7 +157,7 @@ func Execute(call provider.ToolCall, root string, canRead, canWrite bool) (strin
 		if !canRead {
 			return "", fmt.Errorf("file_read er ikke tilladt i whitelist")
 		}
-		return readFile(args, root)
+		return readFile(args, root, extraRoots)
 
 	case "search_files":
 		if !canRead {
@@ -160,25 +169,25 @@ func Execute(call provider.ToolCall, root string, canRead, canWrite bool) (strin
 		if !canRead {
 			return "", fmt.Errorf("file_read er ikke tilladt i whitelist")
 		}
-		return listDir(args, root)
+		return listDir(args, root, extraRoots)
 
 	case "write_file":
 		if !canWrite {
 			return "", fmt.Errorf("file_write er ikke tilladt i whitelist")
 		}
-		return writeFile(args, root)
+		return writeFile(args, root, extraRoots)
 
 	case "edit_file":
 		if !canWrite {
 			return "", fmt.Errorf("file_write er ikke tilladt i whitelist")
 		}
-		return editFile(args, root)
+		return editFile(args, root, extraRoots)
 
 	case "create_dir":
 		if !canWrite {
 			return "", fmt.Errorf("file_write er ikke tilladt i whitelist")
 		}
-		return createDir(args, root)
+		return createDir(args, root, extraRoots)
 
 	default:
 		return "", fmt.Errorf("ukendt tool: %s", call.Name)
@@ -216,14 +225,15 @@ func isSensitivePath(abs string) bool {
 }
 
 // resolveSafeFile validerer at en sti er sikker at læse for LLM-formål:
-// (1) den ligger under root (safePath), (2) symlinks følges og resultatet
-// skal STADIG ligge under root (sandkasse-grænsen kan ellers omgås via et internt symlink),
+// (1) den ligger under root eller en af extraRoots (safePath), (2) symlinks følges
+// og resultatet skal STADIG ligge under en tilladt rod (sandkasse-grænsen kan ellers
+// omgås via et internt symlink),
 // (3) den matcher ikke en kendt følsom mønster (blokliste — forsvarslag, ikke garanti).
 // Returnerer den endelige sti der skal læses fra (undgår TOCTOU mellem tjek og læsning).
 // Brug ALTID denne for ethvert værktøj der lader LLM'en læse filindhold — read_file og
 // search_files deler denne kontrol netop for ikke at glemme den ét sted.
-func resolveSafeFile(root, path string) (string, error) {
-	abs, err := safePath(root, path)
+func resolveSafeFile(root, path string, extraRoots []string) (string, error) {
+	abs, err := safePath(root, path, extraRoots)
 	if err != nil {
 		return "", err
 	}
@@ -231,8 +241,14 @@ func resolveSafeFile(root, path string) (string, error) {
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		resolved = real
 	}
-	cleanRoot := filepath.Clean(root)
-	if resolved != cleanRoot && !strings.HasPrefix(resolved, cleanRoot+string(os.PathSeparator)) {
+	allowed := underRoot(resolved, root)
+	for _, er := range extraRoots {
+		if allowed {
+			break
+		}
+		allowed = underRoot(resolved, er)
+	}
+	if !allowed {
 		return "", fmt.Errorf("sti ikke tilladt: %s (symlink peger uden for projektmappen)", path)
 	}
 	if isSensitivePath(resolved) {
@@ -241,12 +257,12 @@ func resolveSafeFile(root, path string) (string, error) {
 	return resolved, nil
 }
 
-func readFile(args map[string]any, root string) (string, error) {
+func readFile(args map[string]any, root string, extraRoots []string) (string, error) {
 	path, _ := args["path"].(string)
 	if path == "" {
 		return "", fmt.Errorf("path mangler")
 	}
-	resolved, err := resolveSafeFile(root, path)
+	resolved, err := resolveSafeFile(root, path, extraRoots)
 	if err != nil {
 		return "", err
 	}
@@ -326,7 +342,7 @@ func searchFiles(args map[string]any, root string) (string, error) {
 		if contains != "" {
 			// Samme sikre-læsning-kontrol som read_file — undgår at search_files
 			// bliver en bagdør til at eksfiltrere følsomme filer via 'contains'.
-			resolved, err := resolveSafeFile(root, rel)
+			resolved, err := resolveSafeFile(root, rel, nil)
 			if err != nil {
 				return nil
 			}
@@ -375,12 +391,12 @@ func searchFiles(args map[string]any, root string) (string, error) {
 	return strings.Join(matches, "\n"), nil
 }
 
-func listDir(args map[string]any, root string) (string, error) {
+func listDir(args map[string]any, root string, extraRoots []string) (string, error) {
 	path, _ := args["path"].(string)
 	if path == "" {
 		path = "."
 	}
-	abs, err := safePath(root, path)
+	abs, err := safePath(root, path, extraRoots)
 	if err != nil {
 		return "", err
 	}
@@ -407,13 +423,13 @@ func listDir(args map[string]any, root string) (string, error) {
 	return fmt.Sprintf("%s/\n%s", path, strings.Join(lines, "\n")), nil
 }
 
-func writeFile(args map[string]any, root string) (string, error) {
+func writeFile(args map[string]any, root string, extraRoots []string) (string, error) {
 	path, _ := args["path"].(string)
 	content, _ := args["content"].(string)
 	if path == "" {
 		return "", fmt.Errorf("path mangler")
 	}
-	abs, err := safePath(root, path)
+	abs, err := safePath(root, path, extraRoots)
 	if err != nil {
 		return "", err
 	}
@@ -435,7 +451,7 @@ func writeFile(args map[string]any, root string) (string, error) {
 	return fmt.Sprintf("✓ Skrevet: %s (%d bytes)", path, len(content)), nil
 }
 
-func editFile(args map[string]any, root string) (string, error) {
+func editFile(args map[string]any, root string, extraRoots []string) (string, error) {
 	path, _ := args["path"].(string)
 	oldStr, _ := args["old_string"].(string)
 	insertAfter, _ := args["insert_after"].(string)
@@ -446,7 +462,7 @@ func editFile(args map[string]any, root string) (string, error) {
 	if oldStr == "" && insertAfter == "" {
 		return "", fmt.Errorf("old_string eller insert_after mangler")
 	}
-	abs, err := safePath(root, path)
+	abs, err := safePath(root, path, extraRoots)
 	if err != nil {
 		return "", err
 	}
@@ -489,12 +505,12 @@ func editFile(args map[string]any, root string) (string, error) {
 	return fmt.Sprintf("✓ Redigeret: %s", path), nil
 }
 
-func createDir(args map[string]any, root string) (string, error) {
+func createDir(args map[string]any, root string, extraRoots []string) (string, error) {
 	path, _ := args["path"].(string)
 	if path == "" {
 		return "", fmt.Errorf("path mangler")
 	}
-	abs, err := safePath(root, path)
+	abs, err := safePath(root, path, extraRoots)
 	if err != nil {
 		return "", err
 	}
@@ -509,12 +525,64 @@ func createDir(args map[string]any, root string) (string, error) {
 	return fmt.Sprintf("✓ Mappe oprettet: %s", path), nil
 }
 
-// safePath sikrer at stien ikke escaper projektmappen via path traversal.
-func safePath(root, rel string) (string, error) {
-	abs := filepath.Join(root, filepath.Clean(rel))
-	if !strings.HasPrefix(abs, filepath.Clean(root)+string(os.PathSeparator)) &&
-		abs != filepath.Clean(root) {
+// underRoot rapporterer om den rensede, absolutte sti p ligger i eller under roden r.
+func underRoot(p, r string) bool {
+	r = filepath.Clean(r)
+	return p == r || strings.HasPrefix(p, r+string(os.PathSeparator))
+}
+
+// safePath sikrer at stien ikke escaper sandkassen via path traversal.
+// Relative stier opløses under root. Et førende "~" ekspanderes til brugerens
+// hjemmemappe — uden dette blev "~/foo" til en bogstavelig mappe ved navn "~"
+// i projektroden. Absolutte stier (inkl. ekspanderede ~-stier) er kun tilladt
+// under en af extraRoots; fejlbeskeden nævner de tilladte rødder, så LLM'en
+// kan rette sig selv i stedet for at gentage forsøget.
+func safePath(root, rel string, extraRoots []string) (string, error) {
+	p := rel
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("kan ikke opløse ~ i %s: %w", rel, err)
+		}
+		p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+	}
+	if filepath.IsAbs(p) {
+		abs := filepath.Clean(p)
+		for _, er := range extraRoots {
+			if underRoot(abs, er) {
+				return abs, nil
+			}
+		}
+		if len(extraRoots) > 0 {
+			return "", fmt.Errorf("sti uden for projektmappen: %s — absolutte stier er kun tilladt under: %s", rel, strings.Join(extraRoots, ", "))
+		}
+		return "", fmt.Errorf("sti uden for projektmappen: %s — brug en sti relativ til projektroden", rel)
+	}
+	abs := filepath.Join(root, filepath.Clean(p))
+	if !underRoot(abs, root) {
 		return "", fmt.Errorf("sti ikke tilladt: %s", rel)
 	}
 	return abs, nil
+}
+
+// NormalizeExtraRoots forbereder config-værdien extra_roots til brug i safePath:
+// ~ ekspanderes, stier renses, og farlige rødder frasorteres — "/" eller
+// hjemmemappen selv ville reelt ophæve sandkassen.
+func NormalizeExtraRoots(roots []string) []string {
+	home, _ := os.UserHomeDir()
+	var out []string
+	for _, r := range roots {
+		if r == "~" || strings.HasPrefix(r, "~/") {
+			if home == "" {
+				continue
+			}
+			r = filepath.Join(home, strings.TrimPrefix(r, "~"))
+		}
+		r = filepath.Clean(r)
+		if !filepath.IsAbs(r) || r == "/" || (home != "" && r == filepath.Clean(home)) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }

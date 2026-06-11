@@ -44,7 +44,7 @@ func TestSafePath(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := safePath(root, c.rel)
+			_, err := safePath(root, c.rel, nil)
 			if (err != nil) != c.wantErr {
 				t.Errorf("safePath(%q): err=%v, forventet fejl=%v", c.rel, err, c.wantErr)
 			}
@@ -54,22 +54,22 @@ func TestSafePath(t *testing.T) {
 
 func TestExecuteRespektererWhitelist(t *testing.T) {
 	root := t.TempDir()
-	if _, err := Execute(call("read_file", `{"path":"x.txt"}`), root, false, false); err == nil ||
+	if _, err := Execute(call("read_file", `{"path":"x.txt"}`), root, false, false, nil); err == nil ||
 		!strings.Contains(err.Error(), "whitelist") {
 		t.Errorf("read_file uden canRead burde afvises med whitelist-fejl, fik: %v", err)
 	}
-	if _, err := Execute(call("write_file", `{"path":"x.txt","content":"y"}`), root, true, false); err == nil ||
+	if _, err := Execute(call("write_file", `{"path":"x.txt","content":"y"}`), root, true, false, nil); err == nil ||
 		!strings.Contains(err.Error(), "whitelist") {
 		t.Errorf("write_file uden canWrite burde afvises med whitelist-fejl, fik: %v", err)
 	}
-	if _, err := Execute(call("ukendt_tool", `{}`), root, true, true); err == nil {
+	if _, err := Execute(call("ukendt_tool", `{}`), root, true, true, nil); err == nil {
 		t.Error("ukendt tool burde give fejl")
 	}
 }
 
 func TestReadFileTraversalAfvises(t *testing.T) {
 	root, _ := projRoot(t)
-	if _, err := Execute(call("read_file", `{"path":"../hemmelig.txt"}`), root, true, false); err == nil {
+	if _, err := Execute(call("read_file", `{"path":"../hemmelig.txt"}`), root, true, false, nil); err == nil {
 		t.Error("read_file med ../-traversal burde afvises")
 	}
 }
@@ -80,7 +80,7 @@ func TestReadFileSymlinkEscapeAfvises(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Skipf("symlink ikke understøttet: %v", err)
 	}
-	_, err := Execute(call("read_file", `{"path":"genvej.txt"}`), root, true, false)
+	_, err := Execute(call("read_file", `{"path":"genvej.txt"}`), root, true, false, nil)
 	if err == nil {
 		t.Error("read_file via symlink ud af projektmappen burde afvises")
 	}
@@ -92,7 +92,7 @@ func TestReadFileSensitivBlokliste(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(root, name), []byte("hemmeligt"), 0644); err != nil {
 			t.Fatal(err)
 		}
-		out, err := Execute(call("read_file", `{"path":"`+name+`"}`), root, true, false)
+		out, err := Execute(call("read_file", `{"path":"`+name+`"}`), root, true, false, nil)
 		if err == nil {
 			t.Errorf("read_file(%q) burde afvises af bloklisten, fik output: %q", name, out)
 		}
@@ -104,7 +104,7 @@ func TestReadFileNormal(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("indhold her"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	out, err := Execute(call("read_file", `{"path":"note.md"}`), root, true, false)
+	out, err := Execute(call("read_file", `{"path":"note.md"}`), root, true, false, nil)
 	if err != nil {
 		t.Fatalf("read_file: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestReadFileNormal(t *testing.T) {
 
 func TestWriteFileOgIdempotens(t *testing.T) {
 	root := t.TempDir()
-	out, err := Execute(call("write_file", `{"path":"ny/fil.txt","content":"hej"}`), root, false, true)
+	out, err := Execute(call("write_file", `{"path":"ny/fil.txt","content":"hej"}`), root, false, true, nil)
 	if err != nil {
 		t.Fatalf("write_file: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestWriteFileOgIdempotens(t *testing.T) {
 	}
 
 	// Samme indhold igen → "allerede gjort"-signal, ikke ny skrivning.
-	out, err = Execute(call("write_file", `{"path":"ny/fil.txt","content":"hej"}`), root, false, true)
+	out, err = Execute(call("write_file", `{"path":"ny/fil.txt","content":"hej"}`), root, false, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestWriteFileOgIdempotens(t *testing.T) {
 
 func TestWriteFileTraversalAfvises(t *testing.T) {
 	root, outside := projRoot(t)
-	if _, err := Execute(call("write_file", `{"path":"../hemmelig.txt","content":"overskrevet"}`), root, false, true); err == nil {
+	if _, err := Execute(call("write_file", `{"path":"../hemmelig.txt","content":"overskrevet"}`), root, false, true, nil); err == nil {
 		t.Error("write_file med traversal burde afvises")
 	}
 	data, _ := os.ReadFile(outside)
@@ -156,7 +156,7 @@ func TestEditFile(t *testing.T) {
 	}
 
 	// Tilstand 1: erstat unik streng.
-	if _, err := Execute(call("edit_file", `{"path":"kode.go","old_string":"beta","new_string":"BETA"}`), root, false, true); err != nil {
+	if _, err := Execute(call("edit_file", `{"path":"kode.go","old_string":"beta","new_string":"BETA"}`), root, false, true, nil); err != nil {
 		t.Fatalf("edit_file erstat: %v", err)
 	}
 	data, _ := os.ReadFile(path)
@@ -165,7 +165,7 @@ func TestEditFile(t *testing.T) {
 	}
 
 	// old_string der ikke findes → fejl.
-	if _, err := Execute(call("edit_file", `{"path":"kode.go","old_string":"findesikke","new_string":"x"}`), root, false, true); err == nil {
+	if _, err := Execute(call("edit_file", `{"path":"kode.go","old_string":"findesikke","new_string":"x"}`), root, false, true, nil); err == nil {
 		t.Error("ukendt old_string burde give fejl")
 	}
 
@@ -173,7 +173,7 @@ func TestEditFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("dup\ndup\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Execute(call("edit_file", `{"path":"kode.go","old_string":"dup","new_string":"x"}`), root, false, true); err == nil {
+	if _, err := Execute(call("edit_file", `{"path":"kode.go","old_string":"dup","new_string":"x"}`), root, false, true, nil); err == nil {
 		t.Error("flertydig old_string burde give fejl")
 	}
 
@@ -181,7 +181,7 @@ func TestEditFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("linje1\nlinje2\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Execute(call("edit_file", `{"path":"kode.go","insert_after":"linje1\n","new_string":"indsat\n"}`), root, false, true); err != nil {
+	if _, err := Execute(call("edit_file", `{"path":"kode.go","insert_after":"linje1\n","new_string":"indsat\n"}`), root, false, true, nil); err != nil {
 		t.Fatalf("edit_file insert_after: %v", err)
 	}
 	data, _ = os.ReadFile(path)
@@ -190,18 +190,18 @@ func TestEditFile(t *testing.T) {
 	}
 
 	// Hverken old_string eller insert_after → fejl.
-	if _, err := Execute(call("edit_file", `{"path":"kode.go","new_string":"x"}`), root, false, true); err == nil {
+	if _, err := Execute(call("edit_file", `{"path":"kode.go","new_string":"x"}`), root, false, true, nil); err == nil {
 		t.Error("edit_file uden old_string/insert_after burde give fejl")
 	}
 }
 
 func TestCreateDirIdempotens(t *testing.T) {
 	root := t.TempDir()
-	out, err := Execute(call("create_dir", `{"path":"a/b"}`), root, false, true)
+	out, err := Execute(call("create_dir", `{"path":"a/b"}`), root, false, true, nil)
 	if err != nil || !strings.HasPrefix(out, "✓") {
 		t.Fatalf("create_dir: out=%q err=%v", out, err)
 	}
-	out, err = Execute(call("create_dir", `{"path":"a/b"}`), root, false, true)
+	out, err = Execute(call("create_dir", `{"path":"a/b"}`), root, false, true, nil)
 	if err != nil || !strings.HasPrefix(out, "↩") {
 		t.Errorf("eksisterende mappe burde melde ↩, fik out=%q err=%v", out, err)
 	}
@@ -225,7 +225,7 @@ func TestSearchFiles(t *testing.T) {
 		}
 	}
 
-	out, err := Execute(call("search_files", `{"pattern":"*.go"}`), root, true, false)
+	out, err := Execute(call("search_files", `{"pattern":"*.go"}`), root, true, false, nil)
 	if err != nil {
 		t.Fatalf("search_files: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestSearchFiles(t *testing.T) {
 	}
 
 	// Indholdssøgning returnerer linjenumre.
-	out, err = Execute(call("search_files", `{"pattern":"*.go","contains":"nøgleord"}`), root, true, false)
+	out, err = Execute(call("search_files", `{"pattern":"*.go","contains":"nøgleord"}`), root, true, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestSearchFiles(t *testing.T) {
 	}
 
 	// Ingen match.
-	out, err = Execute(call("search_files", `{"pattern":"*.xyz"}`), root, true, false)
+	out, err = Execute(call("search_files", `{"pattern":"*.xyz"}`), root, true, false, nil)
 	if err != nil || out != "Ingen filer fundet." {
 		t.Errorf("tom søgning gav out=%q err=%v", out, err)
 	}
@@ -261,7 +261,7 @@ func TestSearchFilesSpringerSessionsOver(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(private, "historik.json"), []byte("privat samtale"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := Execute(call("search_files", `{"pattern":"historik"}`), root, true, false)
+	out, err := Execute(call("search_files", `{"pattern":"historik"}`), root, true, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func TestSearchFilesContainsLækkerIkkeSensitive(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "secret-config.txt"), []byte("API_KEY=abc123"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	out, err := Execute(call("search_files", `{"pattern":"secret","contains":"API_KEY"}`), root, true, false)
+	out, err := Execute(call("search_files", `{"pattern":"secret","contains":"API_KEY"}`), root, true, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,17 +285,145 @@ func TestSearchFilesContainsLækkerIkkeSensitive(t *testing.T) {
 }
 
 func TestDefinitions(t *testing.T) {
-	if defs := Definitions(false, false); len(defs) != 0 {
+	if defs := Definitions(false, false, nil); len(defs) != 0 {
 		t.Errorf("ingen rettigheder burde give 0 tools, fik %d", len(defs))
 	}
-	readOnly := Definitions(true, false)
+	readOnly := Definitions(true, false, nil)
 	for _, d := range readOnly {
 		if d.Name == "write_file" || d.Name == "edit_file" || d.Name == "create_dir" {
 			t.Errorf("read-only definitioner indeholdt skrive-tool %s", d.Name)
 		}
 	}
-	all := Definitions(true, true)
+	all := Definitions(true, true, nil)
 	if len(all) != 6 {
 		t.Errorf("fuld adgang burde give 6 tools, fik %d", len(all))
+	}
+}
+
+func TestSafePathTilde(t *testing.T) {
+	root := t.TempDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("ingen hjemmemappe: %v", err)
+	}
+
+	// Uden extra_roots: ~-stier afvises med instruktiv fejl — og må ALDRIG
+	// blive til en bogstavelig mappe ved navn "~" i projektroden (den
+	// oprindelige bug: filepath.Join(root, "~/x") foldede stien ind under root).
+	if abs, err := safePath(root, "~/projekter/x.txt", nil); err == nil {
+		t.Fatalf("~-sti uden extra_roots burde afvises, fik: %s", abs)
+	} else if !strings.Contains(err.Error(), "relativ til projektroden") {
+		t.Errorf("fejlen burde forklare at stier er relative til projektroden: %v", err)
+	}
+
+	// Med extra_root under hjemmemappen: ~ ekspanderes og stien tillades.
+	extra := filepath.Join(home, "projekter", "ekte-playground")
+	abs, err := safePath(root, "~/projekter/ekte-playground/demo/fil.txt", []string{extra})
+	if err != nil {
+		t.Fatalf("~-sti under extra_root burde tillades: %v", err)
+	}
+	if want := filepath.Join(extra, "demo", "fil.txt"); abs != want {
+		t.Errorf("forventet %s, fik %s", want, abs)
+	}
+
+	// ~-sti uden for extra_root afvises — fejlen nævner de tilladte rødder.
+	if _, err := safePath(root, "~/andet/fil.txt", []string{extra}); err == nil {
+		t.Error("~-sti uden for extra_root burde afvises")
+	} else if !strings.Contains(err.Error(), extra) {
+		t.Errorf("fejlen burde nævne tilladte rødder, fik: %v", err)
+	}
+}
+
+func TestExecuteMedExtraRoot(t *testing.T) {
+	root := t.TempDir()
+	extra := t.TempDir()
+	extraRoots := []string{extra}
+
+	target := filepath.Join(extra, "proj", "fil.txt")
+	argsJSON, _ := json.Marshal(map[string]string{"path": target, "content": "hej"})
+	if _, err := Execute(call("write_file", string(argsJSON)), root, true, true, extraRoots); err != nil {
+		t.Fatalf("write_file under extra_root burde tillades: %v", err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "hej" {
+		t.Fatalf("filen blev ikke skrevet korrekt: %v / %q", err, data)
+	}
+
+	readArgs, _ := json.Marshal(map[string]string{"path": target})
+	if _, err := Execute(call("read_file", string(readArgs)), root, true, true, extraRoots); err != nil {
+		t.Errorf("read_file under extra_root burde tillades: %v", err)
+	}
+
+	// Absolut sti UDEN FOR extra_root afvises stadig.
+	outside := filepath.Join(filepath.Dir(extra), "udenfor.txt")
+	outArgs, _ := json.Marshal(map[string]string{"path": outside, "content": "x"})
+	if _, err := Execute(call("write_file", string(outArgs)), root, true, true, extraRoots); err == nil {
+		t.Error("write_file uden for extra_root burde afvises")
+	}
+
+	// Uden extra_roots afvises absolutte stier helt.
+	if _, err := Execute(call("write_file", string(argsJSON)), root, true, true, nil); err == nil {
+		t.Error("absolut sti uden extra_roots burde afvises")
+	}
+}
+
+func TestSymlinkEscapeFraExtraRoot(t *testing.T) {
+	root := t.TempDir()
+	base := t.TempDir()
+	extra := filepath.Join(base, "tilladt")
+	if err := os.MkdirAll(extra, 0755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(base, "hemmelig.txt")
+	if err := os.WriteFile(secret, []byte("må ikke læses"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(extra, "genvej.txt")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skipf("symlink ikke understøttet: %v", err)
+	}
+	readArgs, _ := json.Marshal(map[string]string{"path": link})
+	if _, err := Execute(call("read_file", string(readArgs)), root, true, false, []string{extra}); err == nil {
+		t.Error("symlink i extra_root der peger udenfor burde afvises")
+	}
+}
+
+func TestNormalizeExtraRoots(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("ingen hjemmemappe: %v", err)
+	}
+	got := NormalizeExtraRoots([]string{
+		"~/projekter/ekte-playground", // ekspanderes
+		"/",                           // farlig — frasorteres
+		"~",                           // hjemmemappen selv — frasorteres
+		home,                          // hjemmemappen selv — frasorteres
+		"relativ/sti",                 // ikke absolut — frasorteres
+		"/tmp/ekte-test",              // beholdes
+	})
+	want := []string{filepath.Join(home, "projekter", "ekte-playground"), "/tmp/ekte-test"}
+	if len(got) != len(want) {
+		t.Fatalf("forventet %v, fik %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("rod %d: forventet %s, fik %s", i, want[i], got[i])
+		}
+	}
+}
+
+func TestDefinitionsNaevnerExtraRoots(t *testing.T) {
+	defs := Definitions(true, true, []string{"/tmp/playground"})
+	found := false
+	for _, d := range defs {
+		if d.Name != "write_file" {
+			continue
+		}
+		props := d.Parameters["properties"].(map[string]any)
+		desc := props["path"].(map[string]any)["description"].(string)
+		found = strings.Contains(desc, "/tmp/playground")
+	}
+	if !found {
+		t.Error("write_file's path-beskrivelse burde nævne extra_roots")
 	}
 }
