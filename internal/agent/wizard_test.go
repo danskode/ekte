@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/danskode/ekte/internal/provider"
 )
 
 // TestWizardEnterBeholder: tom Enter i model-wizarden betyder "behold nuværende
@@ -18,8 +16,8 @@ func TestWizardEnterBeholder(t *testing.T) {
 		ModelName:        "test-model",
 		ContextSize:      8000,
 		GlobalConfigPath: filepath.Join(t.TempDir(), "config.yaml"),
-		OnProviderReload: func() (provider.Provider, string, string, int, string, error) {
-			return nil, "openai", "test-model", 16000, "", nil
+		OnProviderReload: func() (*ReloadResult, error) {
+			return &ReloadResult{ProviderName: "openai", ModelName: "test-model", ContextSize: 16000}, nil
 		},
 	})
 	ctx := context.Background()

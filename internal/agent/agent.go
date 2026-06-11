@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -74,6 +75,9 @@ type Config struct {
 	SessionDir string
 	Skills     []skill.Skill
 	Whitelist  provider.WhitelistConfig
+	// ExtraRoots er yderligere tilladte rødder for filoperationer
+	// (normaliseret via tools.NormalizeExtraRoots i cmd/ekte).
+	ExtraRoots []string
 	Hooks      map[string]provider.HookConfig
 	Containers provider.ContainerConfig
 	Goal       provider.GoalConfig
@@ -100,12 +104,30 @@ type Config struct {
 	LocalConfigPath  string
 	// BaseURL er den aktuelle provider-baseURL (fx LM Studio / Ollama).
 	BaseURL string
-	// OnProviderReload genindlæser config og returnerer ny provider + metadata + baseURL.
-	OnProviderReload func() (provider.Provider, string, string, int, string, error)
+	// OnProviderReload genindlæser config og returnerer ny provider + metadata.
+	OnProviderReload func() (*ReloadResult, error)
+	// ProbeContext spørger provideren (best-effort) om modellens aktuelt loadede
+	// context-længde. Bruges til reaktiv re-klampning: LM Studio auto-unloader
+	// JIT-modeller efter idle-tid og genloader dem med server-default (typisk
+	// 8192) i stedet for den manuelt valgte context — midt i en session.
+	ProbeContext func() (modelID string, loadedCtx int, ok bool)
 	// GrantLocalURL gemmer brugerens samtykke til en privat provider-URL.
 	// Wires op af cmd/ekte (internal/consent) og kaldes KUN efter eksplicit
 	// 'j' i model-wizardens bekræftelsestrin — aldrig fra tool calls.
 	GrantLocalURL func(url string) error
+}
+
+// ReloadResult er resultatet af OnProviderReload — den nye provider plus
+// metadata til statuslinjen. CtxNote forklarer hvis den effektive context-
+// størrelse afviger fra config (fx klampet til modellens loadede context i
+// LM Studio) — uden den ser brugeren bare et tal de aldrig selv har sat.
+type ReloadResult struct {
+	Provider     provider.Provider
+	ProviderName string
+	ModelName    string
+	ContextSize  int
+	BaseURL      string
+	CtxNote      string
 }
 
 type Agent struct {
@@ -189,6 +211,17 @@ func New(cfg Config) *Agent {
 	a.baseline = []provider.Message{{Role: "system", Content: baseSystemPrompt}}
 	if len(cfg.Memory) > 0 {
 		a.baseline = append(a.baseline, cfg.Memory...)
+	}
+	// Uden fil-rettigheder får modellen ingen tools — og uden denne note "spiller"
+	// den så bare tool-brug i ren tekst ("jeg har oprettet mappen...") uden at
+	// noget sker. Sig det eksplicit, så den svarer ærligt i stedet.
+	if !cfg.Whitelist.FileRead && !cfg.Whitelist.FileWrite {
+		a.baseline = append(a.baseline, provider.Message{
+			Role: "system",
+			Content: "Du har INGEN fil-tools i denne session (whitelist i .ekte/config.yaml tillader ikke fil-adgang). " +
+				"Du kan IKKE læse, skrive eller oprette filer/mapper. Påstå aldrig at du har gjort det — " +
+				"henvis i stedet brugeren til at aktivere whitelist.file_read/file_write i .ekte/config.yaml.",
+		})
 	}
 	if cfg.Whitelist.HarnessWrite {
 		a.baseline = append(a.baseline, provider.Message{
@@ -421,7 +454,10 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 		a.log().Info("historik trimmet", "messages_før", beforeTrim, "messages_efter", len(msgs))
 	}
 
-	toolDefs := tools.Definitions(a.cfg.Whitelist.FileRead, a.cfg.Whitelist.FileWrite)
+	// Plan mode er read-only: læse/søge-tools beholdes, skrive-tools tilbydes
+	// slet ikke — planen sammenfattes i tekst og udføres bagefter i develop mode.
+	canWrite := a.cfg.Whitelist.FileWrite && !a.planMode
+	toolDefs := tools.Definitions(a.cfg.Whitelist.FileRead, canWrite, a.cfg.ExtraRoots)
 	if a.cfg.Whitelist.HookRun && len(a.cfg.Hooks) > 0 {
 		toolDefs = append(toolDefs, a.hookToolDefinition())
 	}
@@ -456,43 +492,68 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 			if effectiveCtx <= 0 {
 				effectiveCtx = 4096
 			}
-			maxPageExcerptChars := 1200
 			budgetTokens := int(float64(effectiveCtx)*0.35) - tokEst
 			if budgetTokens < 200 {
-				budgetTokens = 200
+				// Intet reelt budget: udelad wikien frem for at sprænge konteksten.
+				// (Tidligere blev budgettet gulvet til 200 og antallet af sider var
+				// ubegrænset — en stor wiki kunne så fylde 60%+ af små modellers
+				// context og få hele kaldet afvist af LM Studio.)
+				a.log().Warn("wiki-kontekst udeladt — intet token-budget tilbage", "tokens_est", tokEst, "ctx_size", effectiveCtx)
+				pages = nil
 			}
-			perPage := (budgetTokens * 4) / len(pages)
-			if perPage < 200 {
-				perPage = 200
+			// Begræns antal sider — Query kan returnere mange, og selv afkortede
+			// sider summer op. De første er de mest relevante.
+			const maxWikiPages = 6
+			if len(pages) > maxWikiPages {
+				pages = pages[:maxWikiPages]
 			}
-			if perPage < maxPageExcerptChars {
-				maxPageExcerptChars = perPage
+			maxPageExcerptChars := 1200
+			if len(pages) > 0 {
+				perPage := (budgetTokens * 4) / len(pages)
+				if perPage < 200 {
+					perPage = 200
+				}
+				if perPage < maxPageExcerptChars {
+					maxPageExcerptChars = perPage
+				}
 			}
 
-			var ctxBuilder strings.Builder
-			var paths []string
-			ctxBuilder.WriteString("VIGTIG INSTRUKTION: Følgende wiki-sider er projektets kilde til sandhed.\n")
-			ctxBuilder.WriteString("Kodestandarder, arkitektur og ønsker herfra SKAL følges og prioriteres over generel viden.\n\n")
-			for _, p := range pages {
-				excerpt := p.Content
-				truncated := false
-				if len(excerpt) > maxPageExcerptChars {
-					excerpt = excerpt[:maxPageExcerptChars]
-					if idx := strings.LastIndex(excerpt, "\n"); idx > maxPageExcerptChars/2 {
-						excerpt = excerpt[:idx]
+			if len(pages) > 0 {
+				var ctxBuilder strings.Builder
+				var paths []string
+				ctxBuilder.WriteString("VIGTIG INSTRUKTION: Følgende wiki-sider er projektets kilde til sandhed.\n")
+				ctxBuilder.WriteString("Kodestandarder, arkitektur og ønsker herfra SKAL følges og prioriteres over generel viden.\n\n")
+				for _, p := range pages {
+					excerpt := p.Content
+					truncated := false
+					if len(excerpt) > maxPageExcerptChars {
+						excerpt = excerpt[:maxPageExcerptChars]
+						if idx := strings.LastIndex(excerpt, "\n"); idx > maxPageExcerptChars/2 {
+							excerpt = excerpt[:idx]
+						}
+						truncated = true
 					}
-					truncated = true
+					note := ""
+					if truncated {
+						note = "\n[side afkortet — brug /wiki for fuld version]"
+					}
+					ctxBuilder.WriteString(fmt.Sprintf("=== %s ===\n%s%s\n\n", p.Path, excerpt, note))
+					paths = append(paths, p.Path)
 				}
-				note := ""
-				if truncated {
-					note = "\n[side afkortet — brug /wiki for fuld version]"
-				}
-				ctxBuilder.WriteString(fmt.Sprintf("=== %s ===\n%s%s\n\n", p.Path, excerpt, note))
-				paths = append(paths, p.Path)
+				msgs = append([]provider.Message{{Role: "system", Content: ctxBuilder.String()}}, msgs...)
+				wikiIdx = 0
+				tokEst = estimateTokens(msgs)
 			}
-			msgs = append([]provider.Message{{Role: "system", Content: ctxBuilder.String()}}, msgs...)
-			wikiIdx = 0
+		}
+	}
+
+	// Håndhæv token-budgettet inden afsendelse — wiki-systembeskeden (indeks 0)
+	// røres ikke af trimToBudget, kun samtale-beskeder beskæres.
+	if before := len(msgs); a.cfg.ContextSize > 0 {
+		msgs = trimToBudget(msgs, a.cfg.ContextSize)
+		if len(msgs) < before {
 			tokEst = estimateTokens(msgs)
+			a.log().Warn("prompt beskåret til token-budget", "messages_før", before, "messages_efter", len(msgs), "tokens_est", tokEst)
 		}
 	}
 
@@ -564,6 +625,11 @@ streamAttempts:
 								}
 							}
 						}(eventCh, ctx)
+						// Re-prob modellens context inden retry — fejlen kan skyldes
+						// at LM Studio har JIT-genloadet modellen med mindre context.
+						if a.reprobeContext(ch) && a.cfg.ContextSize > 0 {
+							msgs = trimToBudget(msgs, a.cfg.ContextSize)
+						}
 						select {
 						case <-time.After(earlyStreamRetryDelay):
 						case <-ctx.Done():
@@ -572,7 +638,7 @@ streamAttempts:
 						continue streamAttempts
 					}
 					a.log().Error("stream afbrudt", "error", ev.Err)
-					ch <- Event{Type: EventError, Content: "Stream afbrudt: " + ev.Err.Error()}
+					ch <- Event{Type: EventError, Content: "Stream afbrudt: " + explainStreamErr(ev.Err, tokEst)}
 					return
 				}
 				finalToolCalls = ev.ToolCalls
@@ -719,6 +785,7 @@ streamAttempts:
 	editStreak := 0
 	editStreakPath := ""
 	nudged := false
+	loopWarned := false // første løkke-detektion korrigerer; anden afbryder
 
 	// absoluteMaxToolRounds er en bagstopper, IKKE et praktisk arbejdsloft.
 	// Brugeren har bevidst fjernet det tidligere lave loft (8 runder), så
@@ -764,9 +831,29 @@ streamAttempts:
 		directRepeat := n >= 1 && roundKey == roundKeyHist[n-1]
 		cyclicRepeat := n >= 3 && roundKey == roundKeyHist[n-2] && roundKeyHist[n-1] == roundKeyHist[n-3]
 		if directRepeat || cyclicRepeat {
-			a.log().Warn("løkke detekteret", "round", round, "calls", roundKey, "cyklisk", cyclicRepeat)
-			ch <- Event{Type: EventError, Content: "Modellen gentager samme værktøjskald uden fremskridt — afbryder. Prøv at omformulere din besked."}
-			return
+			a.log().Warn("løkke detekteret", "round", round, "calls", roundKey, "cyklisk", cyclicRepeat, "første_gang", !loopWarned)
+			if loopWarned {
+				ch <- Event{Type: EventError, Content: "Modellen gentager samme værktøjskald uden fremskridt — afbryder. Prøv at omformulere din besked."}
+				return
+			}
+			// Første forseelse: udfør ikke kaldene, men giv modellen en korrektion
+			// og én chance til. Små modeller "starter forfra" efter lange udforsk-
+			// ninger — en hård afbrydelse her smed alt deres arbejde væk og gjorde
+			// goal-loopet til en dødsspiral af afbrudte iterationer.
+			loopWarned = true
+			ch <- Event{Type: EventSystem, Content: "↻ Gentaget værktøjskald opsnappet — ikke udført; modellen bedt om at tage næste skridt."}
+			for _, tc := range pendingCalls {
+				msgs = append(msgs, provider.Message{
+					Role: "tool",
+					Content: "Dette kald blev IKKE udført: det er en gentagelse af et kald du lige har lavet — " +
+						"resultatet står allerede i historikken. Gentag ikke kald. Tag næste skridt mod målet NU: " +
+						"ret de relevante filer med edit_file/write_file, eller afslut med din konklusion.",
+					ToolCallID: tc.ID,
+				})
+			}
+			// Spring eksekveringen over — followup-kaldet nedenfor giver modellen
+			// korrektionen og dens chance for at komme videre.
+			pendingCalls = nil
 		}
 		roundKeyHist = append(roundKeyHist, roundKey)
 		if len(roundKeyHist) > 3 {
@@ -817,7 +904,13 @@ streamAttempts:
 			if cached, seen := toolCache[cacheKey]; seen {
 				a.log().Warn("tool cache hit (duplikat)", "tool", tc.Name, "path", logSafePath(tc.Input))
 				ch <- Event{Type: EventSystem, Content: "↩ " + toolActivityLine(tc, cached, workdir) + " (allerede gjort)"}
-				msgs = append(msgs, provider.Message{Role: "tool", Content: cached, ToolCallID: tc.ID})
+				// Nudge med i cache-svaret: uden den gentager små modeller bare
+				// kaldet igen og ender i løkke-detektionens afbrydelse.
+				msgs = append(msgs, provider.Message{
+					Role:       "tool",
+					Content:    cached + "\n\n[Du har allerede dette resultat fra et identisk kald. Gentag ikke kaldet — tag næste skridt.]",
+					ToolCallID: tc.ID,
+				})
 				continue
 			}
 
@@ -887,6 +980,9 @@ streamAttempts:
 						// analogt med harness-fil-invarianten for config.yaml.
 						if true { //nolint:staticcheck
 							hc := a.cfg.Hooks[hookName]
+							// Samme logning som fil-tools' confirm — uden denne var
+							// run_hook-bekræftelser usynlige i session-loggen.
+							a.log().Info("tool confirm", "tool", "run_hook", "hook", hookName)
 							confirmCh := make(chan ConfirmResponse, 1)
 							ch <- Event{Type: EventToolConfirm, Content: fmt.Sprintf("run_hook → %s  (%s)", hookName, hc.Cmd), ConfirmCh: confirmCh}
 							var resp ConfirmResponse
@@ -917,7 +1013,9 @@ streamAttempts:
 
 			t0 := time.Now()
 			a.log().Debug("tool exec", "tool", tc.Name, "path", logSafePath(tc.Input))
-			result, err := tools.Execute(tc, workdir, a.cfg.Whitelist.FileRead, a.cfg.Whitelist.FileWrite)
+			// canWrite (ikke whitelisten alene) — i plan mode skal et skriveforsøg
+			// afvises selv hvis modellen hallucinerer et write_file-kald.
+			result, err := tools.Execute(tc, workdir, a.cfg.Whitelist.FileRead, canWrite, a.cfg.ExtraRoots)
 			if err == nil {
 				result = stripANSI(result)
 			}
@@ -955,7 +1053,11 @@ streamAttempts:
 			toolLog.WriteString(fmt.Sprintf("tool: %s\n%s\n\n", tc.Name, toolActivityLine(tc, result, workdir)))
 			msgs = append(msgs, provider.Message{Role: "tool", Content: result, ToolCallID: tc.ID})
 		}
-		ch <- Event{Type: EventToolOutput, Content: strings.TrimRight(toolLog.String(), "\n")}
+		// Tom toolLog (fx løkke-korrektion uden udførte kald) skal ikke rydde
+		// panelets eksisterende indhold.
+		if toolLog.Len() > 0 {
+			ch <- Event{Type: EventToolOutput, Content: strings.TrimRight(toolLog.String(), "\n")}
+		}
 
 		// Brugeren redirectede — injicér som brugerbesked i msgs så followup-kaldet
 		// ser præciseringen og kan foreslå en ny tilgang.
@@ -985,6 +1087,16 @@ streamAttempts:
 		}
 
 		t0 := time.Now()
+		// Tool-resultater (filindhold m.m.) vokser hurtigt — budgettér hver runde,
+		// ellers ender lange værktøjs-ture på 200%+ af modellens context.
+		if a.cfg.ContextSize > 0 {
+			if before := len(msgs); true {
+				msgs = trimToBudget(msgs, a.cfg.ContextSize)
+				if len(msgs) < before {
+					a.log().Warn("followup beskåret til token-budget", "round", round, "messages_før", before, "messages_efter", len(msgs))
+				}
+			}
+		}
 		followTokEst := estimateTokens(msgs)
 		followLog := []any{"round", round, "messages", len(msgs), "tokens_est", followTokEst}
 		if a.cfg.ContextSize > 0 {
@@ -992,6 +1104,16 @@ streamAttempts:
 		}
 		a.log().Info("followup start", followLog...)
 		resp, err := a.cfg.Provider.ChatWithTools(ctx, msgs, toolDefs)
+		if err != nil && isTransientProviderErr(err) && ctx.Err() == nil {
+			// LM Studio kan have JIT-genloadet modellen (evt. med mindre context)
+			// midt i turen — re-prob, re-trim og prøv én gang til frem for at
+			// kassere hele den igangværende værktøjs-tur.
+			a.log().Warn("transient provider-fejl — re-prober og prøver igen", "round", round, "error", err)
+			if a.reprobeContext(ch) && a.cfg.ContextSize > 0 {
+				msgs = trimToBudget(msgs, a.cfg.ContextSize)
+			}
+			resp, err = a.cfg.Provider.ChatWithTools(ctx, msgs, toolDefs)
+		}
 		if err != nil {
 			a.log().Error("followup fejl", "round", round, "error", err, "duration_ms", time.Since(t0).Milliseconds())
 			ch <- Event{Type: EventError, Content: "LLM-fejl (tool follow-up): " + err.Error()}
@@ -1208,21 +1330,36 @@ func (a *Agent) messagesWithSkill() []provider.Message {
 
 func (a *Agent) clearSkill() { a.activeSkill = nil }
 
-// trimHistory begrænser hvad der sendes til LLM: system-beskeder bevares (maks 2),
-// kun de seneste maxNonSystem user/assistant-beskeder medtages.
+// trimHistory begrænser hvad der sendes til LLM: kun de seneste maxNonSystem
+// user/assistant-beskeder medtages. System-beskeder dedupliceres og bevares —
+// baseline (systemprompt, hukommelse, hook-noter, projektkontekst) er kurateret
+// ved opstart og er netop agentens "viden". (Tidligere blev kun de FØRSTE 2
+// system-beskeder bevaret — så mistede modellen hukommelse og projektkontekst
+// efter første tur, og ved resume næsten alt, da baseline dér ligger sidst.)
 func trimHistory(msgs []provider.Message, maxNonSystem int) []provider.Message {
 	var sys, conv []provider.Message
+	seenSys := map[string]bool{}
 	for _, m := range msgs {
 		if m.Role == "system" {
+			// Dedupliker: fx gentagne plan-mode-prompter ved Shift+Tab frem/tilbage.
+			if seenSys[m.Content] {
+				continue
+			}
+			seenSys[m.Content] = true
 			sys = append(sys, m)
 		} else {
 			conv = append(conv, m)
 		}
 	}
-	// Begræns system-beskeder: behold de første 2 (base + evt. én wiki/skill-injektion)
-	const maxSys = 2
+	// Loft mod ubegrænset vækst (CWE-770): behold de første 4 (basisprompt +
+	// første hukommelses-beskeder) og de nyeste — kun midten ryger.
+	const maxSys = 16
 	if len(sys) > maxSys {
-		sys = sys[:maxSys]
+		const keepHead = 4
+		trimmed := make([]provider.Message, 0, maxSys)
+		trimmed = append(trimmed, sys[:keepHead]...)
+		trimmed = append(trimmed, sys[len(sys)-(maxSys-keepHead):]...)
+		sys = trimmed
 	}
 	if len(conv) > maxNonSystem {
 		cut := len(conv) - maxNonSystem
@@ -1270,6 +1407,89 @@ func trimHistory(msgs []provider.Message, maxNonSystem int) []provider.Message {
 		conv = conv[cut:]
 	}
 	return append(sys, conv...)
+}
+
+// isTransientProviderErr genkender fejl hvor et retry (evt. efter re-klampning)
+// giver mening: LM Studio har lige genloadet modellen, eller afviste kaldet
+// med en SSE-fejl som go-openai ikke kunne parse (typisk context-overskridelse).
+func isTransientProviderErr(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "Model reloaded") ||
+		strings.Contains(s, "unexpected end of JSON input") ||
+		// MLX-modeller kan crashe i LM Studio; næste kald JIT-genloader modellen
+		// (typisk med server-default context — re-proben fanger skrumpningen).
+		strings.Contains(s, "model has crashed")
+}
+
+// reprobeContext opdaterer ContextSize hvis modellens loadede context er
+// SKRUMPET (LM Studio JIT-reload med server-default). Vokser aldrig — config'ens
+// værdi er brugerens loft, og en konservativ værdi giver kun ekstra trimning.
+// Returnerer true hvis noget ændrede sig, så kalderen kan re-trimme og retry'e.
+func (a *Agent) reprobeContext(ch chan<- Event) bool {
+	if a.cfg.ProbeContext == nil {
+		return false
+	}
+	id, loaded, ok := a.cfg.ProbeContext()
+	if !ok || loaded <= 0 || a.cfg.ContextSize <= 0 || loaded >= a.cfg.ContextSize {
+		return false
+	}
+	old := a.cfg.ContextSize
+	a.cfg.ContextSize = loaded
+	a.log().Warn("model-context skrumpet — re-klampet", "før", old, "nu", loaded, "model", id)
+	ch <- Event{Type: EventSystem, Content: fmt.Sprintf(
+		"⚠ Modellen er genloadet i LM Studio med %d tokens context (før: %d) — ekte har tilpasset sig. "+
+			"Sæt modellens default-context op i LM Studio (My Models) for at undgå dette.", loaded, old)}
+	ch <- Event{Type: EventModelInfo, Content: a.cfg.ModelName, Tokens: loaded}
+	return true
+}
+
+// trimToBudget håndhæver token-budgettet ved afsendelse: overstiger den
+// estimerede prompt ~90% af maxTokens, fjernes de ÆLDSTE samtale-beskeder til
+// prompten passer. System-beskeder røres ikke (kurateret viden). Beskeder
+// fjernes i BLOKKE: en assistant-besked med tool calls tager sine tool-svar
+// med sig, og forældreløse tool-svar fjernes samlet — ellers afviser
+// OpenAI-kompatible API'er hele kaldet. Der bevares altid mindst én
+// user-besked (Jinja-skabeloner kræver det).
+//
+// Uden dette MÅLTE ekte kun overskridelsen (ctx_pct i loggen) og sendte
+// alligevel — LM Studio afviser så kaldet med en SSE-fejl der ender som
+// "unexpected end of JSON input" i stedet for et svar.
+func trimToBudget(msgs []provider.Message, maxTokens int) []provider.Message {
+	if maxTokens <= 0 {
+		return msgs
+	}
+	budget := maxTokens * 9 / 10 // luft til svar + estimat-usikkerhed
+	for estimateTokens(msgs) > budget {
+		// Find ældste ikke-system blokstart.
+		start := -1
+		for i, m := range msgs {
+			if m.Role != "system" {
+				start = i
+				break
+			}
+		}
+		if start == -1 {
+			return msgs // kun system tilbage — intet mere at beskære
+		}
+		end := start + 1
+		if len(msgs[start].ToolCalls) > 0 || msgs[start].Role == "tool" {
+			for end < len(msgs) && msgs[end].Role == "tool" {
+				end++
+			}
+		}
+		// Bevar mindst én user-besked i det der bliver tilbage.
+		userLeft := 0
+		for i, m := range msgs {
+			if m.Role == "user" && (i < start || i >= end) {
+				userLeft++
+			}
+		}
+		if userLeft == 0 {
+			return msgs
+		}
+		msgs = append(msgs[:start:start], msgs[end:]...)
+	}
+	return msgs
 }
 
 // stripThinkTags fjerner <think>...</think>-blokke fra teksten så de ikke ender i historikken.
@@ -1354,6 +1574,23 @@ func actualOrEstimate(resp *provider.Response, messages []provider.Message) int 
 	return estimateTokens(messages)
 }
 
+// explainStreamErr oversætter kendte kryptiske provider-fejl til noget brugeren
+// kan handle på. "unexpected end of JSON input" opstår når en OpenAI-kompatibel
+// server afviser streamen uden fejl-JSON go-openai kan parse — i praksis oftest
+// LM Studio, der sender SSE 'event: error' (med HTTP 200) når prompten er
+// større end modellens LOADEDE context-længde. Den vedvarende variant rammer
+// her efter retry-loopets forsøg; den transiente (død keep-alive-forbindelse)
+// fanges af retries og når aldrig hertil.
+func explainStreamErr(err error, tokEst int) string {
+	if strings.Contains(err.Error(), "unexpected end of JSON input") {
+		return fmt.Sprintf("provideren afviste streamen uden læsbar fejlbesked (%v). "+
+			"Prompten var ~%d tokens — er modellen loadet med mindre context i LM Studio? "+
+			"Genindlæs den med større context-længde, eller sænk context_size i .ekte/config.yaml.",
+			err, tokEst)
+	}
+	return err.Error()
+}
+
 func estimateTokens(messages []provider.Message) int {
 	// Fast overhead for system-prompt, tool-definitioner og message-metadata.
 	// len(content)/4 undervurderer systematisk — overhead kompenserer delvist.
@@ -1388,6 +1625,86 @@ func renderWorktreeList(wts []git.Worktree) string {
 		sb.WriteString(fmt.Sprintf("  %s\n  branch: %s\n  sti: %s\n\n", wt.Name, wt.Branch, wt.Path))
 	}
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+const (
+	autoSectionStart = "<!-- ekte:bygget:start -->"
+	autoSectionEnd   = "<!-- ekte:bygget:slut -->"
+)
+
+// upsertAutoSection erstatter (eller tilføjer) den auto-vedligeholdte
+// byggeresumé-sektion i ekte.md — resten af filen røres ikke.
+func upsertAutoSection(existing, summary string) string {
+	block := autoSectionStart + "\n## Bygget af ekte (auto-opdateret " + time.Now().Format("2006-01-02") + ")\n\n" +
+		summary + "\n" + autoSectionEnd
+	if i := strings.Index(existing, autoSectionStart); i >= 0 {
+		if j := strings.Index(existing, autoSectionEnd); j > i {
+			return existing[:i] + block + existing[j+len(autoSectionEnd):]
+		}
+	}
+	if existing != "" && !strings.HasSuffix(existing, "\n") {
+		existing += "\n"
+	}
+	return existing + "\n" + block + "\n"
+}
+
+// persistGoalSummary skriver/opdaterer en auto-sektion i ekte.md med hvad der
+// netop er bygget — ekte.md loades som projektkontekst ved opstart, så
+// fremtidige sessioner kan videreudvikle og fejlrette uden at genlæse hele
+// kodebasen. Skrivningen kræver brugerbekræftelse (ekte.md er en harness-fil).
+func (a *Agent) persistGoalSummary(ctx context.Context, goalDesc string, ch chan<- Event) {
+	if a.cfg.Provider == nil || a.cfg.WorkDir == "" {
+		return
+	}
+	msgs := append([]provider.Message{}, a.messages...)
+	msgs = trimHistory(msgs, maxHistoryMessages)
+	if a.cfg.ContextSize > 0 {
+		msgs = trimToBudget(msgs, a.cfg.ContextSize)
+	}
+	msgs = append(msgs, provider.Message{Role: "user", Content: "Målet er nået:\n" + goalDesc + "\n\n" +
+		"Skriv nu et kort projektnotat i markdown (maks 30 linjer) om hvad der er bygget: formål, " +
+		"mappestruktur og nøglefiler, ruter/endpoints, login-oplysninger, port, og hvordan projektet køres. " +
+		"Notatet gemmes i ekte.md og loades som kontekst i fremtidige sessioner — skriv KUN notatet, ingen indledning."})
+	resp, err := a.cfg.Provider.Chat(ctx, msgs)
+	if err != nil || strings.TrimSpace(resp.Content) == "" {
+		a.log().Warn("kunne ikke generere byggeresumé til ekte.md", "error", err)
+		return
+	}
+	summary := strings.TrimSpace(stripThinkTags(resp.Content))
+
+	path := filepath.Join(a.cfg.WorkDir, "ekte.md")
+	existing := ""
+	if data, err := os.ReadFile(path); err == nil {
+		existing = string(data)
+	}
+	updated := upsertAutoSection(existing, summary)
+
+	// ekte.md er en harness-fil: skrivning kræver ALTID eksplicit bekræftelse.
+	confirmCh := make(chan ConfirmResponse, 1)
+	ch <- Event{Type: EventToolConfirm, Content: fmt.Sprintf("skriv byggeresumé til ekte.md (auto-sektion, %d tegn)", len(summary)), ConfirmCh: confirmCh}
+	select {
+	case r := <-confirmCh:
+		if !r.Approved {
+			ch <- Event{Type: EventSystem, Content: "↩ byggeresumé til ekte.md afvist"}
+			return
+		}
+	case <-ctx.Done():
+		return
+	}
+	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+		ch <- Event{Type: EventError, Content: "kunne ikke skrive ekte.md: " + err.Error()}
+		return
+	}
+	a.log().Info("byggeresumé skrevet til ekte.md", "tegn", len(summary))
+	ch <- Event{Type: EventSystem, Content: "📝 ekte.md opdateret med byggeresumé — fremtidige sessioner starter med denne viden."}
+}
+
+var urlRe = regexp.MustCompile(`https?://[^\s"']+`)
+
+// firstURL finder den første URL i en tekst — bruges til at vise projektets
+// adresse i goal-succesbeskeden.
+func firstURL(s string) string {
+	return urlRe.FindString(s)
 }
 
 func (a *Agent) streamGoal(ctx context.Context, goalDesc string, ch chan<- Event) {
@@ -1438,9 +1755,14 @@ func (a *Agent) streamGoal(ctx context.Context, goalDesc string, ch chan<- Event
 				goalDesc,
 			)
 		} else {
+			// Små modeller genstarter ofte kodelæsningen i hver iteration og bliver
+			// så afbrudt af løkke-detektionen før de når at skrive noget — en
+			// dødsspiral. Sig eksplicit: ret, læs ikke forfra.
 			prompt = fmt.Sprintf(
-				"Forrige build-output:\n```\n%s\n```\n\n"+
-					"Målet er endnu ikke nået. Ret fejlene og forbedre koden mod målet:\n%s",
+				"Forrige check-output:\n```\n%s\n```\n\n"+
+					"Målet er endnu ikke nået. Du har ALLEREDE udforsket koden i forrige iteration — "+
+					"læs IKKE alle filer igen. Gå direkte til at rette fejlene fra check-outputtet "+
+					"med edit_file/write_file (læs højst de 1-2 filer rettelsen vedrører). Målet:\n%s",
 				lastCheckOutput, goalDesc,
 			)
 		}
@@ -1466,7 +1788,17 @@ func (a *Agent) streamGoal(ctx context.Context, goalDesc string, ch chan<- Event
 		}
 
 		if success {
-			ch <- Event{Type: EventSystem, Content: fmt.Sprintf("✓ Mål nået efter %d iteration(er).", i+1)}
+			msg := fmt.Sprintf("✓ Mål nået efter %d iteration(er).", i+1)
+			// springcheck (og lignende hooks) printer projektets adresse —
+			// løft den op i succesbeskeden så brugeren ser hvor appen kører.
+			if url := firstURL(lastCheckOutput); url != "" {
+				msg += "\n🌐 Projektet kan tilgås på: " + url
+			}
+			ch <- Event{Type: EventSystem, Content: msg}
+			// Persistér byggeforståelsen i ekte.md — uden den glemmer modellen
+			// alt mellem sessioner og må genlæse kodebasen forfra ved hver
+			// videreudvikling/fejlretning.
+			a.persistGoalSummary(ctx, goalDesc, ch)
 			return
 		}
 	}

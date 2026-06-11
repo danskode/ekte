@@ -175,6 +175,12 @@ hooks:
   test: go test ./...
   lint: golangci-lint run
   build: go build ./...
+
+# Ekstra rødder — valgfrit. Mapper uden for projektmappen hvor fil-tools
+# også må læse/skrive (absolutte stier; ~ ekspanderes). Uden denne er
+# alle stier låst til projektmappen. Bekræftelses-flowet gælder uændret.
+extra_roots:
+  - ~/projekter/playground
 ```
 
 > **OBS:** Tilladelser er `false` som standard. Uden whitelist-konfiguration vil `/spec`, `/wiki gem` og `/hook` blive blokeret med en forklarende fejlbesked.

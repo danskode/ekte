@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,8 @@ import (
 	"github.com/danskode/ekte/internal/provider"
 	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
+	"github.com/danskode/ekte/internal/springcheck"
+	"github.com/danskode/ekte/internal/tools"
 	"github.com/danskode/ekte/internal/tui"
 	"github.com/danskode/ekte/internal/wiki"
 	"gopkg.in/yaml.v3"
@@ -31,16 +34,32 @@ func main() {
 		runInit()
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "springcheck" {
+		runSpringCheck()
+		return
+	}
 	autoApprove := false
 	sessionArg := ""
-	for _, arg := range os.Args[1:] {
-		if arg == "-y" || arg == "--yes" {
+	goalText := ""
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "-y" || args[i] == "--yes":
 			autoApprove = true
-		} else if sessionArg == "" {
-			sessionArg = arg
+		case args[i] == "goal":
+			// Headless goal-mode: `ekte -y goal "<beskrivelse>"` kører mål-loopet
+			// uden TUI — til CI, scripts og autonome kørsler.
+			goalText = strings.Join(args[i+1:], " ")
+			i = len(args)
+		case sessionArg == "":
+			sessionArg = args[i]
 		}
 	}
-	runTUI(sessionArg, autoApprove)
+	if goalText != "" {
+		runTUI("", autoApprove, goalText)
+		return
+	}
+	runTUI(sessionArg, autoApprove, "")
 }
 
 func globalEkteDir() string {
@@ -48,7 +67,9 @@ func globalEkteDir() string {
 	return filepath.Join(home, ".ekte")
 }
 
-func runTUI(sessionArg string, autoApprove bool) {
+// runTUI bygger agenten og starter TUI'en — eller, hvis headlessGoal er sat,
+// kører goal-loopet uden TUI med events på stdout (CI/autonome kørsler).
+func runTUI(sessionArg string, autoApprove bool, headlessGoal string) {
 	cwd, _ := os.Getwd()
 	globalDir := globalEkteDir()
 
@@ -140,11 +161,13 @@ func runTUI(sessionArg string, autoApprove bool) {
 	var hooks map[string]provider.HookConfig
 	var containers provider.ContainerConfig
 	var goal provider.GoalConfig
+	var extraRoots []string
 	if cfg != nil {
 		whitelist = cfg.Whitelist
 		hooks = cfg.Hooks
 		containers = cfg.Containers
 		goal = cfg.Goal
+		extraRoots = tools.NormalizeExtraRoots(cfg.ExtraRoots)
 	}
 	if autoApprove {
 		whitelist.AutoApprove = true
@@ -162,6 +185,12 @@ func runTUI(sessionArg string, autoApprove bool) {
 	if sessionArg != "" {
 		if found, err := session.FindByName(sessionDir, sessionArg); err == nil && found != nil {
 			resumeSession = found
+		} else if globalSessions := filepath.Join(globalDir, "sessions"); globalSessions != sessionDir {
+			// Sessioner gemt FØR projektet fik .ekte/ ligger i den globale
+			// mappe — uden fallback ser en navngiven session ud som "tom chat".
+			if found, err := session.FindByName(globalSessions, sessionArg); err == nil && found != nil {
+				resumeSession = found
+			}
 		}
 	}
 
@@ -189,6 +218,7 @@ func runTUI(sessionArg string, autoApprove bool) {
 	if cfg != nil && cfg.ContextSize > 0 {
 		contextSize = cfg.ContextSize
 	}
+	contextSize = clampToLoadedContext(cfg, contextSize, true)
 
 	memory := loadMemory(globalDir, cwd)
 
@@ -200,6 +230,7 @@ func runTUI(sessionArg string, autoApprove bool) {
 		WorkDir:          cwd,
 		SessionDir:       sessionDir,
 		Whitelist:        whitelist,
+		ExtraRoots:       extraRoots,
 		Hooks:            hooks,
 		Containers:       containers,
 		Goal:             goal,
@@ -220,12 +251,18 @@ func runTUI(sessionArg string, autoApprove bool) {
 			// bekræftelsestrin — samtykket gemmes globalt som ved opstart.
 			return consent.Grant(globalDir, u)
 		},
-		OnProviderReload: func() (provider.Provider, string, string, int, string, error) {
+		ProbeContext: func() (string, int, bool) {
+			if cfg == nil {
+				return "", 0, false
+			}
+			return provider.ProbeLoadedContext(cfg)
+		},
+		OnProviderReload: func() (*agent.ReloadResult, error) {
 			newGlobal, _ := provider.LoadConfig(globalConfigPath)
 			newLocal, _ := provider.LoadConfig(localConfigPath)
 			newCfg := provider.MergeConfigs(newGlobal, newLocal)
 			if newCfg == nil {
-				return nil, "", "", 0, "", fmt.Errorf("ingen config fundet")
+				return nil, fmt.Errorf("ingen config fundet")
 			}
 			// Genvalidér disk-config'ens URL mod samtykkelisten: er filen
 			// ændret udenom wizarden til en ikke-godkendt privat URL, afvises
@@ -234,22 +271,43 @@ func runTUI(sessionArg string, autoApprove bool) {
 				if consent.EnvOverride() || consent.Granted(globalDir, newCfg.BaseURL) {
 					newCfg.AllowLocal = true
 				} else {
-					return nil, "", "", 0, "", fmt.Errorf(
+					return nil, fmt.Errorf(
 						"base_url %s er privat og ikke godkendt — genstart ekte for at bekræfte", newCfg.BaseURL)
 				}
 			}
 			newProv, err := provider.NewFromConfig(newCfg)
 			if err != nil {
-				return nil, "", "", 0, "", err
+				return nil, err
 			}
-			return newProv, newCfg.Provider, newCfg.Model, newCfg.ContextSize, newCfg.BaseURL, nil
+			newCtxSize := clampToLoadedContext(newCfg, newCfg.ContextSize, false)
+			note := ""
+			if newCfg.ContextSize > 0 && newCtxSize < newCfg.ContextSize {
+				note = fmt.Sprintf(
+					"Modellen er loadet med %d tokens context i LM Studio — config'en siger %d. "+
+						"ekte retter sig efter %d; genindlæs modellen i LM Studio med større context for at hæve den.",
+					newCtxSize, newCfg.ContextSize, newCtxSize)
+			}
+			return &agent.ReloadResult{
+				Provider:     newProv,
+				ProviderName: newCfg.Provider,
+				ModelName:    newCfg.Model,
+				ContextSize:  newCtxSize,
+				BaseURL:      newCfg.BaseURL,
+				CtxNote:      note,
+			}, nil
 		},
 	})
+
+	if headlessGoal != "" {
+		runGoalLoop(a, headlessGoal, autoApprove)
+		return
+	}
 
 	m := tui.New(a)
 	m.SetNames(profile.UserName, profile.AgentName)
 	m.SetMaxTokens(contextSize)
 	m.SetModelName(modelName)
+	m.SetWorkDir(cwd)
 
 	if provider.KeyInFile(globalConfigPath) || provider.KeyInFile(localConfigPath) {
 		m.AddWarning("⚠  API-nøgle fundet i config-fil — flyt den til env-variabel:\nexport ANTHROPIC_API_KEY=\"din-nøgle\"  (tilføj til ~/.bashrc)")
@@ -265,8 +323,18 @@ func runTUI(sessionArg string, autoApprove bool) {
 	m.ShowBanner()
 	if resumeSession != nil {
 		m.AddInfo(fmt.Sprintf("✓ Session genoptaget: %s (%s)", resumeSession.Title, resumeSession.Name))
+	} else if sessionArg != "" {
+		// Navngiven session ikke fundet: sig det højt — ellers ligner det bare
+		// en tom chat, og brugeren tror historikken er væk.
+		m.AddWarning(fmt.Sprintf("⚠  Session '%s' blev ikke fundet (søgt i %s og den globale mappe) — startede en ny session.", sessionArg, sessionDir))
 	} else if hint := recentSessionsHint(sessionDir); hint != "" {
 		m.AddInfo(hint)
+	}
+	// Uden fil-rettigheder får LLM'en slet ingen tools tilbudt — den svarer så
+	// bare "jeg kan ikke skrive til mappen" uden at brugeren kan se hvorfor.
+	if !whitelist.FileRead && !whitelist.FileWrite {
+		m.AddInfo("ℹ  Fil-tools er slået fra — modellen kan hverken læse eller skrive filer.\n" +
+			"   Aktivér med whitelist.file_read / file_write i .ekte/config.yaml")
 	}
 	if isFirstRun {
 		m.SetWelcome(welcomeName)
@@ -509,6 +577,65 @@ func loadEkteMd(dir string) string {
 	return strings.TrimSpace(string(data))
 }
 
+// runGoalLoop kører /goal headless: events skrives til stdout, og tool-
+// bekræftelser besvares programmatisk — godkendt med -y, ellers afvist.
+// Exitkode 0 hvis målet blev nået, ellers 1.
+func runGoalLoop(a *agent.Agent, goalText string, autoApprove bool) {
+	if !autoApprove {
+		fmt.Fprintln(os.Stderr, "⚠  headless goal uden -y: alle skriveoperationer afvises — kør med -y for at godkende automatisk")
+	}
+	ch := a.ProcessStream(context.Background(), "/goal "+goalText)
+	reached := false
+	for ev := range ch {
+		switch ev.Type {
+		case agent.EventToolConfirm:
+			if autoApprove {
+				fmt.Println("⚙ auto-godkendt: " + ev.Content)
+				ev.ConfirmCh <- agent.ConfirmResponse{Approved: true}
+			} else {
+				fmt.Println("✗ afvist (mangler -y): " + ev.Content)
+				ev.ConfirmCh <- agent.ConfirmResponse{Approved: false}
+			}
+		case agent.EventStreamToken, agent.EventReasoningToken, agent.EventThinking,
+			agent.EventTokenCount, agent.EventModelInfo:
+			// Stille i headless — det fulde svar kommer i EventStreamDone.
+		default:
+			if ev.Content != "" {
+				fmt.Println(ev.Content)
+				if strings.Contains(ev.Content, "✓ Mål nået") {
+					reached = true
+				}
+			}
+		}
+	}
+	if !reached {
+		os.Exit(1)
+	}
+}
+
+// clampToLoadedContext sænker contextSize til modellens faktisk loadede
+// context-længde, hvis LM Studio rapporterer en mindre (ProbeLoadedContext).
+// Uden dette trimmer ekte historikken efter config'ens context_size, sender
+// prompts modellen ikke kan rumme, og LM Studio afviser dem med en SSE-fejl
+// der ender som kryptisk "unexpected end of JSON input". warn styrer om der
+// skrives en advarsel til stderr — kun ved opstart, før TUI'en tager skærmen.
+func clampToLoadedContext(cfg *provider.Config, contextSize int, warn bool) int {
+	id, loaded, ok := provider.ProbeLoadedContext(cfg)
+	if !ok {
+		return contextSize
+	}
+	if contextSize == 0 || loaded < contextSize {
+		if warn && contextSize > 0 {
+			fmt.Fprintf(os.Stderr,
+				"⚠  %s er loadet med %d tokens context i LM Studio — config'ens context_size er %d.\n"+
+					"   ekte retter sig efter %d; genindlæs modellen med større context for at få mere.\n",
+				id, loaded, contextSize, loaded)
+		}
+		return loaded
+	}
+	return contextSize
+}
+
 // loadMemory læser hukommelsesfiler fra global (~/.ekte/memory/) og
 // projekt-lokal (.ekte/memory/) mappe og returnerer dem som system-beskeder.
 // Global læses først (lavere prioritet), lokal herefter (højere prioritet).
@@ -603,6 +730,28 @@ func sanitizeMemoryContent(content string) string {
 	return strings.Join(lines, "\n")
 }
 
+// runSpringCheck kører Java+Thymeleaf-goal-tjekket i den aktuelle mappe.
+// Valgfrit argument: "bruger:kode" til det autentificerede flow (default
+// admin:admin). Exitkode 0 = mål nået (hook-konventionen for goal.check_hook).
+func runSpringCheck() {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fejl: %v\n", err)
+		os.Exit(1)
+	}
+	login := ""
+	if len(os.Args) > 2 {
+		login = os.Args[2]
+	}
+	rep := springcheck.Run(context.Background(), cwd, login)
+	for _, line := range rep.Lines {
+		fmt.Println(line)
+	}
+	if !rep.OK {
+		os.Exit(1)
+	}
+}
+
 func runInit() {
 	configPath := filepath.Join(".ekte", "config.yaml")
 
@@ -612,6 +761,10 @@ func runInit() {
 		os.Exit(1)
 	}
 
+	type goalSection struct {
+		CheckHook     string `yaml:"check_hook"`
+		MaxIterations int    `yaml:"max_iterations"`
+	}
 	type fullConfig struct {
 		Provider  string                   `yaml:"provider"`
 		Model     string                   `yaml:"model"`
@@ -619,12 +772,36 @@ func runInit() {
 		Wiki      *wiki.Config             `yaml:"wiki,omitempty"`
 		Whitelist provider.WhitelistConfig `yaml:"whitelist"`
 		Hooks     map[string]string        `yaml:"hooks,omitempty"`
+		Goal      *goalSection             `yaml:"goal,omitempty"`
 	}
 
 	cfg := fullConfig{Provider: "openai", Model: "gpt-4o", Wiki: wikiCfg}
 	if data, err := os.ReadFile(configPath); err == nil {
 		_ = yaml.Unmarshal(data, &cfg)
 		cfg.Wiki = wikiCfg
+	}
+
+	// Java + Thymeleaf (Spring Boot): sæt hooks og goal op automatisk, så
+	// /goal virker fra start — succes = compile uden fejl + ingen Whitelabel-
+	// fejl eller døde links/endpoints (tjekkes af `ekte springcheck`).
+	springProject := false
+	if pom, err := os.ReadFile("pom.xml"); err == nil && strings.Contains(string(pom), "thymeleaf") {
+		springProject = true
+		if cfg.Hooks == nil {
+			cfg.Hooks = map[string]string{}
+		}
+		if _, ok := cfg.Hooks["compile"]; !ok {
+			cfg.Hooks["compile"] = "mvn -q compile"
+		}
+		if _, ok := cfg.Hooks["test"]; !ok {
+			cfg.Hooks["test"] = "mvn -q test"
+		}
+		if _, ok := cfg.Hooks["goalcheck"]; !ok {
+			cfg.Hooks["goalcheck"] = "ekte springcheck"
+		}
+		if cfg.Goal == nil {
+			cfg.Goal = &goalSection{CheckHook: "goalcheck", MaxIterations: 10}
+		}
 	}
 
 	if err := os.MkdirAll(".ekte", 0755); err != nil {
@@ -639,6 +816,11 @@ func runInit() {
 	}
 
 	fmt.Printf("✓ Config gemt: %s\n", configPath)
+	if springProject {
+		fmt.Println("✓ Java + Thymeleaf genkendt — hooks (compile/test/goalcheck) og goal er sat op.")
+		fmt.Println("  /goal <beskrivelse> arbejder til compile er ren og alle sider/endpoints")
+		fmt.Println("  svarer uden Whitelabel-fejl — og viser så projektets lokale adresse.")
+	}
 	fmt.Println()
 	fmt.Println("Whitelist (tilladelser) er sat til false som standard.")
 	fmt.Println("Rediger .ekte/config.yaml for at tillade operationer:")

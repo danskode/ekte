@@ -60,6 +60,8 @@ Når LLM'en returnerer tool calls kører agenten et uendeligt loop (`streamChat`
 
 Config læses fra `.ekte/config.yaml` i projektmappen (ikke i ekte-repo'et selv). `WhitelistConfig` styrer hvilke operationer der er tilladt: `git_worktree`, `wiki_write`, `hook_run`, `file_read`, `file_write`, `wiki_fetch`, `auto_approve`. Alt er `false` som standard.
 
+Fil-tools er sandboxet til projektmappen (`safePath` i `internal/tools`): `~` ekspanderes til hjemmemappen, og absolutte stier er kun tilladt under rødder angivet i `extra_roots` i config (normaliseret via `tools.NormalizeExtraRoots` — `/` og hjemmemappen selv frasorteres). De tilladte rødder nævnes i tool-beskrivelserne, så LLM'en kender dem.
+
 ### Skills
 
 En skill er en markdown-fil med YAML-frontmatter (`name`, `description`, `tags`, `system_prompt_addition`). Filer hentes fra `.ekte/skills/` i projektmappen eller fra SKILLeton-kataloget via `/skills catalog` / `/skills install`. Aktiv skill injiceres som første system-besked i næste prompt, derefter nulstilles den.

@@ -339,25 +339,30 @@ func (a *Agent) applyModelConfig() []Event {
 		}
 	}
 
-	newProv, provName, modelName, ctxSize, baseURL, err := a.cfg.OnProviderReload()
+	res, err := a.cfg.OnProviderReload()
 	if err != nil {
 		return []Event{{Type: EventError, Content: "Config gemt, men reload fejlede: " + err.Error() + "\nGenstart ekte for at aktivere ændringerne."}}
 	}
-	a.cfg.Provider = newProv
-	a.cfg.ProviderName = provName
-	a.cfg.ModelName = modelName
-	a.cfg.ContextSize = ctxSize
-	a.cfg.BaseURL = baseURL
+	a.cfg.Provider = res.Provider
+	a.cfg.ProviderName = res.ProviderName
+	a.cfg.ModelName = res.ModelName
+	a.cfg.ContextSize = res.ContextSize
+	a.cfg.BaseURL = res.BaseURL
 
 	urlPart := ""
-	if baseURL != "" {
-		urlPart = " via " + baseURL
+	if res.BaseURL != "" {
+		urlPart = " via " + res.BaseURL
 	}
-	return []Event{
-		{Type: EventSystem, Content: fmt.Sprintf("✓ Provider skiftet til %s / %s%s — aktiv nu. Gemt i: %s", provName, modelName, urlPart, targetPath)},
+	events := []Event{
+		{Type: EventSystem, Content: fmt.Sprintf("✓ Provider skiftet til %s / %s%s — aktiv nu. Gemt i: %s", res.ProviderName, res.ModelName, urlPart, targetPath)},
+	}
+	if res.CtxNote != "" {
+		events = append(events, Event{Type: EventSystem, Content: "⚠ " + res.CtxNote})
+	}
+	return append(events,
 		// Giv TUI'en besked om ny model og kontekststørrelse, så statuslinjens
 		// "kontekst: x/N" og modelnavn opdateres uden genstart.
-		{Type: EventModelInfo, Content: modelName, Tokens: ctxSize},
-		{Type: EventTokenCount, Tokens: a.tokenCount},
-	}
+		Event{Type: EventModelInfo, Content: res.ModelName, Tokens: res.ContextSize},
+		Event{Type: EventTokenCount, Tokens: a.tokenCount},
+	)
 }
