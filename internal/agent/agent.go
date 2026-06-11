@@ -638,7 +638,7 @@ streamAttempts:
 						continue streamAttempts
 					}
 					a.log().Error("stream afbrudt", "error", ev.Err)
-					ch <- Event{Type: EventError, Content: "Stream afbrudt: " + explainStreamErr(ev.Err, tokEst)}
+					ch <- Event{Type: EventError, Content: explainStreamErr(ev.Err, tokEst)}
 					return
 				}
 				finalToolCalls = ev.ToolCalls
@@ -1114,9 +1114,20 @@ streamAttempts:
 			}
 			resp, err = a.cfg.Provider.ChatWithTools(ctx, msgs, toolDefs)
 		}
+		// Netværksfejl midt i en værktøjs-tur: prøv én gang til efter en kort
+		// pause før vi opgiver — et kortvarigt udfald skal ikke kassere turen.
+		if err != nil && isNetworkErr(err.Error()) && ctx.Err() == nil {
+			a.log().Warn("netværksfejl i followup — prøver igen", "round", round, "error", err)
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return
+			}
+			resp, err = a.cfg.Provider.ChatWithTools(ctx, msgs, toolDefs)
+		}
 		if err != nil {
 			a.log().Error("followup fejl", "round", round, "error", err, "duration_ms", time.Since(t0).Milliseconds())
-			ch <- Event{Type: EventError, Content: "LLM-fejl (tool follow-up): " + err.Error()}
+			ch <- Event{Type: EventError, Content: explainStreamErr(err, followTokEst)}
 			return
 		}
 		finalContent := stripThinkTags(resp.Content)
@@ -1582,13 +1593,37 @@ func actualOrEstimate(resp *provider.Response, messages []provider.Message) int 
 // her efter retry-loopets forsøg; den transiente (død keep-alive-forbindelse)
 // fanges af retries og når aldrig hertil.
 func explainStreamErr(err error, tokEst int) string {
-	if strings.Contains(err.Error(), "unexpected end of JSON input") {
-		return fmt.Sprintf("provideren afviste streamen uden læsbar fejlbesked (%v). "+
+	s := err.Error()
+	if isNetworkErr(s) {
+		// Forbindelsen røg midt i inferensen (mistet wifi, provider genstartet).
+		// Det delvise svar er IKKE gemt i historikken — sig klart at man bare kan
+		// prøve igen, så genoptagelsen ikke er forvirrende.
+		return "🔌 Forbindelsen til modellen blev afbrudt midt i svaret (" + s + ").\n" +
+			"Intet halvt svar er gemt — skriv 'fortsæt' eller stil dit spørgsmål igen, så prøver jeg forfra."
+	}
+	if strings.Contains(s, "unexpected end of JSON input") {
+		return fmt.Sprintf("Stream afbrudt: provideren afviste streamen uden læsbar fejlbesked (%v). "+
 			"Prompten var ~%d tokens — er modellen loadet med mindre context i LM Studio? "+
 			"Genindlæs den med større context-længde, eller sænk context_size i .ekte/config.yaml.",
 			err, tokEst)
 	}
-	return err.Error()
+	return "Stream afbrudt: " + s
+}
+
+// isNetworkErr genkender afbrudte/mislykkede forbindelser (mistet net, provider
+// nede) — adskilt fra applikationsfejl, så brugeren får en klar genoptag-besked
+// frem for en kryptisk transport-fejl.
+func isNetworkErr(s string) bool {
+	for _, pat := range []string{
+		"connection refused", "connection reset", "no route to host",
+		"network is unreachable", "no such host", "i/o timeout",
+		"EOF", "broken pipe", "TLS handshake", "dial tcp", "context deadline exceeded",
+	} {
+		if strings.Contains(s, pat) {
+			return true
+		}
+	}
+	return false
 }
 
 func estimateTokens(messages []provider.Message) int {
