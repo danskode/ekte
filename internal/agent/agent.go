@@ -65,6 +65,11 @@ type Event struct {
 	Source    string               // wiki-kilde, vises efter svaret
 	Stats     string               // ydelses-statistik (tok/s), vises neutralt under svaret
 	ConfirmCh chan ConfirmResponse // kun EventToolConfirm: send svar for at bekræfte/afvise/omdirigere
+	// HookName/HookCmd sættes KUN på EventToolConfirm for run_hook, så det
+	// headless goal-loop kan skelne et hook-kald fra en fil-bekræftelse og
+	// afvise projekt-lokale, ikke-betroede hooks selv med -y (CWE-78/829).
+	HookName string
+	HookCmd  string
 }
 
 type Config struct {
@@ -115,6 +120,15 @@ type Config struct {
 	// Wires op af cmd/ekte (internal/consent) og kaldes KUN efter eksplicit
 	// 'j' i model-wizardens bekræftelsestrin — aldrig fra tool calls.
 	GrantLocalURL func(url string) error
+	// HookTrusted afgør om en hook-kommando må køres uden videre samtykke:
+	// true for hooks fra den globale (betroede) config, env-override eller
+	// tidligere godkendte. Wires op af cmd/ekte. Nil ⇒ alt regnes betroet
+	// (bevarer adfærd hvis ikke sat).
+	HookTrusted func(cmd string) bool
+	// GrantHookConsent gemmer brugerens samtykke til en hook-kommando, så den
+	// fremover kan køre i headless `-y goal`. Kaldes KUN efter eksplicit 'j'
+	// på en run_hook-bekræftelse i TUI'en — aldrig fra et tool call selv.
+	GrantHookConsent func(cmd string) error
 }
 
 // ReloadResult er resultatet af OnProviderReload — den nye provider plus
@@ -984,7 +998,13 @@ streamAttempts:
 							// run_hook-bekræftelser usynlige i session-loggen.
 							a.log().Info("tool confirm", "tool", "run_hook", "hook", hookName)
 							confirmCh := make(chan ConfirmResponse, 1)
-							ch <- Event{Type: EventToolConfirm, Content: fmt.Sprintf("run_hook → %s  (%s)", hookName, hc.Cmd), ConfirmCh: confirmCh}
+							ch <- Event{
+								Type:      EventToolConfirm,
+								Content:   fmt.Sprintf("run_hook → %s  (%s)", hookName, hc.Cmd),
+								ConfirmCh: confirmCh,
+								HookName:  hookName,
+								HookCmd:   hc.Cmd,
+							}
 							var resp ConfirmResponse
 							select {
 							case r := <-confirmCh:
@@ -996,6 +1016,15 @@ streamAttempts:
 							if !resp.Approved {
 								msgs = append(msgs, provider.Message{Role: "tool", Content: "Afvist af bruger", ToolCallID: tc.ID})
 								continue
+							}
+							// Godkendt interaktivt: hvis hooket ikke allerede er
+							// betroet (projekt-lokalt), persistér samtykket så det
+							// fremover også kan køre i headless `-y goal`. Synligt
+							// for brugeren — aldrig en stille tillidsudvidelse.
+							if a.cfg.GrantHookConsent != nil && a.cfg.HookTrusted != nil && !a.cfg.HookTrusted(hc.Cmd) {
+								if err := a.cfg.GrantHookConsent(hc.Cmd); err == nil {
+									ch <- Event{Type: EventSystem, Content: fmt.Sprintf("🔒 hook '%s' betroet og gemt — kan nu køre i headless -y goal", hookName)}
+								}
 							}
 						}
 						result, hookErr := a.runHookForTool(ctx, hookName, ch)

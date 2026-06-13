@@ -142,6 +142,25 @@ globale ekte-mappe, så en klonet projekt-config aldrig kan give sig selv lov.
 Til headless/scriptet brug kan dialogen springes over med
 `EKTE_ALLOW_LOCAL_PROVIDER=1`.
 
+### Hooks og headless `-y goal`
+
+I TUI'en kræver `run_hook` altid en bekræftelse pr. kald — også med `-y`. I
+headless `ekte -y goal "…"` auto-godkendes fil-skrivninger, men **hooks gates
+særskilt**: en hook fra et klonet, ubetroet repos `.ekte/config.yaml` kan ellers
+udføre vilkårlige shell-kommandoer uden interaktion (CWE-78/829).
+
+En hook regnes som betroet — og auto-godkendes headless — hvis kommandoen:
+
+- står i din **globale** `~/.ekte/config.yaml` (din egen maskine), eller
+- er **godkendt før** (godkender du et `run_hook` interaktivt i TUI'en, gemmes
+  kommandoen i `~/.ekte/consent.yaml` og kan derefter køre headless), eller
+- `EKTE_ALLOW_LOCAL_HOOKS=1` er sat (den eksplicitte opt-in til scriptet brug).
+
+Matchningen sker pr. præcis **kommando-streng**, ikke hook-navn: ændrer et repo
+kommandoen bag et betroet navn, kræves nyt samtykke. Bemærk at
+`EKTE_ALLOW_LOCAL_PROVIDER` *ikke* åbner for hooks — de to tilladelser er
+bevidst adskilt.
+
 ---
 
 ## Konfiguration

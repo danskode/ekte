@@ -154,3 +154,96 @@ func TestEnvOverride(t *testing.T) {
 		t.Error("EKTE_ALLOW_LOCAL_PROVIDER=1 burde være override")
 	}
 }
+
+func TestAllowLocalHooks(t *testing.T) {
+	t.Setenv("EKTE_ALLOW_LOCAL_HOOKS", "")
+	if AllowLocalHooks() {
+		t.Error("tom env-var burde ikke tillade lokale hooks")
+	}
+	t.Setenv("EKTE_ALLOW_LOCAL_HOOKS", "1")
+	if !AllowLocalHooks() {
+		t.Error("EKTE_ALLOW_LOCAL_HOOKS=1 burde tillade lokale hooks")
+	}
+	// Provider-overriden må IKKE samtidig åbne for hooks (ingen scope-overload).
+	t.Setenv("EKTE_ALLOW_LOCAL_HOOKS", "")
+	t.Setenv("EKTE_ALLOW_LOCAL_PROVIDER", "1")
+	if AllowLocalHooks() {
+		t.Error("EKTE_ALLOW_LOCAL_PROVIDER må ikke tillade lokale hooks")
+	}
+}
+
+func TestGrantHookOgGrantedHook(t *testing.T) {
+	dir := t.TempDir()
+	cmd := "mvn -q compile"
+
+	if GrantedHook(dir, cmd) {
+		t.Fatal("ingen samtykkefil — GrantedHook burde være false")
+	}
+	if err := GrantHook(dir, cmd); err != nil {
+		t.Fatalf("GrantHook: %v", err)
+	}
+	if !GrantedHook(dir, cmd) {
+		t.Error("hook-samtykke blev ikke fundet efter GrantHook")
+	}
+
+	// Match er pr. præcis KOMMANDO: en ændret kommando (selv let) er IKKE
+	// dækket — så en klonet config ikke kan genbruge et betroet hook-navn til
+	// en anden kommando. (Strengene her sammenlignes kun, køres aldrig.)
+	for _, other := range []string{
+		"mvn -q compile ; echo overskrevet",
+		"mvn compile",
+		"npm run build",
+	} {
+		if GrantedHook(dir, other) {
+			t.Errorf("GrantedHook(%q) burde være false — samtykke er pr. præcis kommando", other)
+		}
+	}
+
+	// Trimning ændrer ikke identiteten.
+	if !GrantedHook(dir, "  "+cmd+"  ") {
+		t.Error("trimmet kommando burde matche gemt hook-samtykke")
+	}
+}
+
+func TestGrantHookIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	cmd := "go test ./..."
+	for i := 0; i < 3; i++ {
+		if err := GrantHook(dir, cmd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := load(dir)
+	if len(f.Hooks) != 1 {
+		t.Errorf("gentaget GrantHook gav %d poster, forventet 1", len(f.Hooks))
+	}
+}
+
+func TestGrantHookTomKommandoSkriverIkke(t *testing.T) {
+	dir := t.TempDir()
+	if err := GrantHook(dir, "   "); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, fileName)); !os.IsNotExist(err) {
+		t.Error("tom kommando burde ikke oprette samtykkefil")
+	}
+	if GrantedHook(dir, "") {
+		t.Error("tom kommando burde aldrig være granted")
+	}
+}
+
+// TestHookProjektmappeIsolation: en hook-samtykkefil plantet i et klonet repos
+// .ekte/ må ikke påvirke global GrantedHook — samme garanti som for providere.
+// Den plantede kommando er en ufarlig markør; den sammenlignes kun som streng.
+func TestHookProjektmappeIsolation(t *testing.T) {
+	globalDir := t.TempDir()
+	projektDir := t.TempDir()
+
+	planted := "hooks:\n  - url: utroet-hook-markør\n    granted: \"2026-01-01\"\n"
+	if err := os.WriteFile(filepath.Join(projektDir, fileName), []byte(planted), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if GrantedHook(globalDir, "utroet-hook-markør") {
+		t.Error("hook-samtykke plantet i projektmappe påvirkede global GrantedHook")
+	}
+}

@@ -178,6 +178,24 @@ func runTUI(sessionArg string, autoApprove bool, headlessGoal string) {
 		fmt.Fprintln(os.Stderr, "⚠  -y/--yes: fil-bekræftelser er deaktiveret — LLM kan skrive filer uden godkendelse")
 	}
 
+	// hookTrusted afgør om en hook-kommando må køres uden videre samtykke.
+	// Hooks fra den GLOBALE config (brugerens egen ~/.ekte/config.yaml) er
+	// betroede. Projekt-lokale hooks kan stamme fra et klonet, ondsindet repo
+	// og udføre vilkårlige shell-kommandoer (CWE-78/829) — de er kun betroede
+	// hvis kommandoen er godkendt før (consent.yaml) eller EKTE_ALLOW_LOCAL_HOOKS
+	// er sat. Matchning sker på kommando-strengen, ikke hook-navnet.
+	globalHookCmds := map[string]bool{}
+	if globalCfg != nil {
+		for _, hc := range globalCfg.Hooks {
+			if hc.Cmd != "" {
+				globalHookCmds[hc.Cmd] = true
+			}
+		}
+	}
+	hookTrusted := func(cmd string) bool {
+		return globalHookCmds[cmd] || consent.AllowLocalHooks() || consent.GrantedHook(globalDir, cmd)
+	}
+
 	// Brug lokal session-mappe hvis .ekte/ eksisterer, ellers global fallback
 	sessionDir := filepath.Join(globalDir, "sessions")
 	if _, err := os.Stat(".ekte"); err == nil {
@@ -255,6 +273,13 @@ func runTUI(sessionArg string, autoApprove bool, headlessGoal string) {
 			// bekræftelsestrin — samtykket gemmes globalt som ved opstart.
 			return consent.Grant(globalDir, u)
 		},
+		HookTrusted: hookTrusted,
+		GrantHookConsent: func(cmd string) error {
+			// Kaldes kun efter eksplicit 'j' på en run_hook-bekræftelse i
+			// TUI'en — samtykket gemmes globalt så hooket fremover kan køre
+			// i headless `-y goal`.
+			return consent.GrantHook(globalDir, cmd)
+		},
 		ProbeContext: func() (string, int, bool) {
 			if cfg == nil {
 				return "", 0, false
@@ -303,7 +328,7 @@ func runTUI(sessionArg string, autoApprove bool, headlessGoal string) {
 	})
 
 	if headlessGoal != "" {
-		runGoalLoop(a, headlessGoal, autoApprove)
+		runGoalLoop(a, headlessGoal, autoApprove, hookTrusted)
 		return
 	}
 
@@ -648,26 +673,36 @@ func loadEkteMd(dir string) string {
 
 // runGoalLoop kører /goal headless: events skrives til stdout, og tool-
 // bekræftelser besvares programmatisk — godkendt med -y, ellers afvist.
-// Exitkode 0 hvis målet blev nået, ellers 1.
-func runGoalLoop(a *agent.Agent, goalText string, autoApprove bool) {
+// hookTrusted gater dog run_hook: projekt-lokale, ikke-betroede hooks afvises
+// selv med -y, så et klonet repo ikke kan auto-eksekvere vilkårlige kommandoer
+// (CWE-78/829). Exitkode 0 hvis målet blev nået, ellers 1.
+func runGoalLoop(a *agent.Agent, goalText string, autoApprove bool, hookTrusted func(cmd string) bool) {
 	if !autoApprove {
 		fmt.Fprintln(os.Stderr, "⚠  headless goal uden -y: alle skriveoperationer afvises — kør med -y for at godkende automatisk")
 	} else {
-		// -y goal auto-godkender ALT, inkl. run_hook (vilkårlig kommando-
-		// eksekvering defineret i .ekte/config.yaml). Kør kun i betroede repos.
-		fmt.Fprintln(os.Stderr, "⚠  -y goal: skriveoperationer OG hooks auto-godkendes uden bekræftelse — kør kun i et repo du stoler på.")
+		// -y goal auto-godkender fil-skrivninger. Hooks auto-godkendes KUN hvis
+		// de er betroede (global config, EKTE_ALLOW_LOCAL_HOOKS, eller godkendt
+		// før); ikke-betroede projekt-lokale hooks afvises uanset -y.
+		fmt.Fprintln(os.Stderr, "⚠  -y goal: skriveoperationer auto-godkendes uden bekræftelse — kør kun i et repo du stoler på.")
 	}
 	ch := a.ProcessStream(context.Background(), "/goal "+goalText)
 	reached := false
 	for ev := range ch {
 		switch ev.Type {
 		case agent.EventToolConfirm:
-			if autoApprove {
-				fmt.Println("⚙ auto-godkendt: " + ev.Content)
-				ev.ConfirmCh <- agent.ConfirmResponse{Approved: true}
-			} else {
+			switch {
+			case !autoApprove:
 				fmt.Println("✗ afvist (mangler -y): " + ev.Content)
 				ev.ConfirmCh <- agent.ConfirmResponse{Approved: false}
+			case ev.HookName != "" && hookTrusted != nil && !hookTrusted(ev.HookCmd):
+				// Projekt-lokal hook der ikke er betroet — afvis selv med -y.
+				fmt.Printf("✗ afvist: hook '%s' er ikke betroet i headless (%s)\n"+
+					"  Kør ekte interaktivt og godkend hooket én gang, eller sæt EKTE_ALLOW_LOCAL_HOOKS=1.\n",
+					ev.HookName, ev.HookCmd)
+				ev.ConfirmCh <- agent.ConfirmResponse{Approved: false}
+			default:
+				fmt.Println("⚙ auto-godkendt: " + ev.Content)
+				ev.ConfirmCh <- agent.ConfirmResponse{Approved: true}
 			}
 		case agent.EventStreamToken, agent.EventReasoningToken, agent.EventThinking,
 			agent.EventTokenCount, agent.EventModelInfo:
