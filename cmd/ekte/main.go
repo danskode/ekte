@@ -191,6 +191,10 @@ func runTUI(sessionArg string, autoApprove bool, headlessGoal string) {
 	// filer (pom.xml, package.json), så samme kommando-streng = vidt forskellig
 	// risiko i et klonet repo (CWE-829). Et fjendtligt repo kunne ellers efterabe
 	// en global kommando og få sin egen build-/plugin-kode kørt autonomt.
+	// Edge case: en tom-men-ikke-nil lokal hooks-nøgle (`hooks: {}`) gør
+	// hooksFromGlobal falsk → alle hooks (ingen) regnes lokale. Det er fail-safe
+	// (mere restriktivt, aldrig mindre), så vi skelner bevidst ikke mellem
+	// fraværende og tom nøgle her.
 	hooksFromGlobal := localCfg == nil || localCfg.Hooks == nil
 	hookTrusted := func(cmd string) bool {
 		return hooksFromGlobal || consent.AllowLocalHooks() || consent.GrantedHook(globalDir, cmd)
