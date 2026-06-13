@@ -149,17 +149,19 @@ headless `ekte -y goal "…"` auto-godkendes fil-skrivninger, men **hooks gates
 særskilt**: en hook fra et klonet, ubetroet repos `.ekte/config.yaml` kan ellers
 udføre vilkårlige shell-kommandoer uden interaktion (CWE-78/829).
 
-En hook regnes som betroet — og auto-godkendes headless — hvis kommandoen:
+Tillid bestemmes af **oprindelse**, ikke kommando-streng. En hook regnes som
+betroet — og auto-godkendes headless — hvis:
 
-- står i din **globale** `~/.ekte/config.yaml` (din egen maskine), eller
-- er **godkendt før** (godkender du et `run_hook` interaktivt i TUI'en, gemmes
-  kommandoen i `~/.ekte/consent.yaml` og kan derefter køre headless), eller
+- de aktive hooks kommer fra din **globale** `~/.ekte/config.yaml` (din egen
+  maskine), dvs. projektet definerer ikke selv hooks. Definerer projektet egne
+  hooks, erstatter de de globale og regnes alle som lokale (ubetroede), eller
+- hookets kommando er **godkendt før** (godkender du et `run_hook` interaktivt i
+  TUI'en, gemmes kommandoen i `~/.ekte/consent.yaml`), eller
 - `EKTE_ALLOW_LOCAL_HOOKS=1` er sat (den eksplicitte opt-in til scriptet brug).
 
-Matchningen sker pr. præcis **kommando-streng**, ikke hook-navn: ændrer et repo
-kommandoen bag et betroet navn, kræves nyt samtykke. Bemærk at
-`EKTE_ALLOW_LOCAL_PROVIDER` *ikke* åbner for hooks — de to tilladelser er
-bevidst adskilt.
+`EKTE_ALLOW_LOCAL_PROVIDER` åbner *ikke* for hooks — de to tilladelser er bevidst
+adskilt. Det per-kommando-samtykke i `consent.yaml` matcher på præcis kommando-
+streng: ændrer et repo kommandoen bag et betroet navn, kræves nyt samtykke.
 
 Samme gating gælder `goal.check_hook`, som ellers kører programmatisk i hver
 `/goal`-iteration uden per-kald-bekræftelse: er check-hookets kommando ikke
@@ -167,6 +169,20 @@ betroet, nægter `/goal` at starte. Og `ekte springcheck` kører kun projektets
 eget `./mvnw` (et repo-leveret script) hvis `EKTE_ALLOW_LOCAL_HOOKS` er sat —
 ellers bruges system-`mvn`, så et klonet repo ikke kan eksekvere vilkårlig kode
 via wrapper-scriptet.
+
+> **Vær opmærksom:** At betro et build-baseret check_hook (fx `ekte springcheck`,
+> `mvn`, `gradle`, `npm`) betyder at betro projektets **build-logik**. Selv med
+> system-`mvn` eksekverer en `pom.xml` vilkårlig kode via Maven-plugins bundet
+> til `compile`/`run`-faserne — det samme gælder Gradle-tasks og npm-scripts.
+> Gatingen styrer *hvornår* det starter autonomt, men når hooket først er
+> betroet, kører projektets byggekode uden yderligere bekræftelse. Betro derfor
+> kun check_hooks i repos du faktisk stoler på.
+
+Et projekt-lokalt hook arver **ikke** tillid ved at efterabe en global kommando-
+streng: netop fordi build-kommandoer kører repo-bestemt kode, ville `mvn compile`
+i et klonet repo være en helt anden risiko end det samme `mvn compile` i din
+globale config. Lokale hooks kræver derfor altid samtykke eller
+`EKTE_ALLOW_LOCAL_HOOKS`, uanset om en global hook har samme kommando.
 
 ---
 

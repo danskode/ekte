@@ -178,22 +178,22 @@ func runTUI(sessionArg string, autoApprove bool, headlessGoal string) {
 		fmt.Fprintln(os.Stderr, "⚠  -y/--yes: fil-bekræftelser er deaktiveret — LLM kan skrive filer uden godkendelse")
 	}
 
-	// hookTrusted afgør om en hook-kommando må køres uden videre samtykke.
-	// Hooks fra den GLOBALE config (brugerens egen ~/.ekte/config.yaml) er
-	// betroede. Projekt-lokale hooks kan stamme fra et klonet, ondsindet repo
-	// og udføre vilkårlige shell-kommandoer (CWE-78/829) — de er kun betroede
-	// hvis kommandoen er godkendt før (consent.yaml) eller EKTE_ALLOW_LOCAL_HOOKS
-	// er sat. Matchning sker på kommando-strengen, ikke hook-navnet.
-	globalHookCmds := map[string]bool{}
-	if globalCfg != nil {
-		for _, hc := range globalCfg.Hooks {
-			if hc.Cmd != "" {
-				globalHookCmds[hc.Cmd] = true
-			}
-		}
-	}
+	// hookTrusted afgør om et hook må køres uden videre samtykke. Tillid
+	// bestemmes af OPRINDELSE, ikke kommando-streng: definerer projekt-configen
+	// egne hooks, erstatter de den globale (MergeConfigs), og alle aktive hooks
+	// er da projekt-lokale — de kan stamme fra et klonet repo og kræver eksplicit
+	// samtykke (consent.yaml) eller EKTE_ALLOW_LOCAL_HOOKS. Kun når de aktive
+	// hooks kommer fra den globale config (brugerens egen maskine) er de betroede
+	// som standard.
+	//
+	// Tillid må IKKE arves på streng-match mod global config: build-kommandoer
+	// som 'mvn compile', './mvnw' eller 'npm test' kører kode bestemt af repo-
+	// filer (pom.xml, package.json), så samme kommando-streng = vidt forskellig
+	// risiko i et klonet repo (CWE-829). Et fjendtligt repo kunne ellers efterabe
+	// en global kommando og få sin egen build-/plugin-kode kørt autonomt.
+	hooksFromGlobal := localCfg == nil || localCfg.Hooks == nil
 	hookTrusted := func(cmd string) bool {
-		return globalHookCmds[cmd] || consent.AllowLocalHooks() || consent.GrantedHook(globalDir, cmd)
+		return hooksFromGlobal || consent.AllowLocalHooks() || consent.GrantedHook(globalDir, cmd)
 	}
 
 	// Brug lokal session-mappe hvis .ekte/ eksisterer, ellers global fallback
