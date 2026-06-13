@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const templateRepo = "https://github.com/danskode/simple-wiki.git"
+const templateRepo = "https://github.com/danskode/simple-minded.git"
 
 type Config struct {
 	Enabled bool   `yaml:"enabled"`

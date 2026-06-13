@@ -92,24 +92,34 @@ func Run(dir string) (Result, error) {
 	fmt.Println("──────────────────────────────────")
 	fmt.Println("simple-minded samler din viden på tværs af projekter.")
 	fmt.Println("Tilgå den manuelt med /wiki — aldrig automatisk injiceret.")
+	skillsDir := filepath.Join(dir, ".ekte", "skills")
 	if ask(r, "Vil du sætte en wiki op?") {
 		wikiPath := runWikiSetup(r, dir)
 		if wikiPath != "" {
 			appendWikiConfig(configPath, wikiPath)
 			fmt.Printf("✓ Wiki konfigureret: %s\n", wikiPath)
+			// Wikien kræver vedligeholdelses-skills (gap-analyse m.m.) for at fungere.
+			installRequired(skillsDir, "wiki")
 		}
 	} else {
 		fmt.Println("  Du kan altid sætte det op senere med 'ekte init'.")
 	}
 
-	// 6. SKILLeton
+	// 6. AIDD-skills — obligatoriske, da AIDD er præmissen for ekte.
+	fmt.Println()
+	fmt.Println("AIDD-skills (obligatoriske — præmissen for ekte)")
+	fmt.Println("────────────────────────────────────────────────")
+	installRequired(skillsDir, "harness")
+
+	// 7. SKILLeton — øvrige, valgfrie skills
 	fmt.Println()
 	fmt.Println("Skills — SKILLeton")
 	fmt.Println("──────────────────")
 	fmt.Println("SKILLeton er et åbent bibliotek af skills til ekte.")
-	fmt.Println("En skill tilføjer et system-prompt til næste LLM-besked — gælder kun ét prompt.")
-	if ask(r, "Vil du vælge skills fra SKILLeton?") {
-		runSkillCatalog(r, filepath.Join(dir, ".ekte", "skills"))
+	fmt.Println("Valgte skills installeres permanent i .ekte/skills/ og kan bruges fremover.")
+	fmt.Println("(Aktivér en installeret skill pr. prompt med /skills <navn> — den nulstilles bagefter.)")
+	if ask(r, "Vil du vælge flere skills fra SKILLeton?") {
+		runSkillCatalog(r, skillsDir)
 	} else {
 		fmt.Println("  Du kan tilføje skills senere med '/skills catalog' i ekte.")
 	}
@@ -323,13 +333,47 @@ func runWikiSetup(r *bufio.Reader, dir string) string {
 			return ""
 		}
 	} else {
-		fmt.Println("   Kloner Simple Minded wiki-template...")
-		if err := cloneWiki("https://github.com/danskode/simple-minded.git", wikiPath); err != nil {
-			fmt.Printf("   ⚠  Kunne ikke klone template: %v\n", err)
-			return ""
+		const repo = "https://github.com/danskode/simple-minded.git"
+		if ask(r, "Vil du starte med standard AIDD-indhold (færdige wiki-sider om AIDD)?") {
+			fmt.Println("   Kloner Simple Minded med AIDD-startindhold...")
+			if err := cloneWikiBranch(repo, "aidd", wikiPath); err != nil {
+				fmt.Printf("   ⚠  Kunne ikke klone AIDD-branch: %v\n", err)
+				return ""
+			}
+		} else {
+			fmt.Println("   Kloner tom Simple Minded wiki-template...")
+			if err := cloneWiki(repo, wikiPath); err != nil {
+				fmt.Printf("   ⚠  Kunne ikke klone template: %v\n", err)
+				return ""
+			}
 		}
 	}
 	return wikiPath
+}
+
+// installRequired auto-installerer de skills i SKILLeton der er markeret som
+// obligatoriske for en given funktion (fx "harness" eller "wiki").
+func installRequired(skillsDir, feature string) {
+	cat, err := skill.FetchCatalog()
+	if err != nil {
+		return
+	}
+	required := cat.RequiredFor(feature)
+	if len(required) == 0 {
+		return
+	}
+	_ = os.MkdirAll(skillsDir, 0755)
+	installed := skill.InstalledNames(skillsDir)
+	for _, entry := range required {
+		if installed[entry.Name] {
+			continue
+		}
+		if err := skill.DownloadSkill(entry, skillsDir); err != nil {
+			fmt.Printf("   ⚠  obligatorisk skill %s: %v\n", entry.Name, err)
+			continue
+		}
+		fmt.Printf("   ✓ obligatorisk skill installeret: %s\n", entry.Name)
+	}
 }
 
 func runSkillCatalog(r *bufio.Reader, skillsDir string) {
@@ -399,7 +443,18 @@ func parseChoices(input string, max int) []int {
 
 func cloneWiki(url, dest string) error {
 	_ = os.MkdirAll(filepath.Dir(dest), 0755)
-	out, err := runCmd("git", "clone", url, dest)
+	// '--' sikrer at url/dest aldrig fortolkes som flag (argument injection).
+	out, err := runCmd("git", "clone", "--", url, dest)
+	if err != nil {
+		return fmt.Errorf("%s", out)
+	}
+	return nil
+}
+
+// cloneWikiBranch kloner en specifik branch — bruges til AIDD-startindhold.
+func cloneWikiBranch(url, branch, dest string) error {
+	_ = os.MkdirAll(filepath.Dir(dest), 0755)
+	out, err := runCmd("git", "clone", "--branch", branch, "--", url, dest)
 	if err != nil {
 		return fmt.Errorf("%s", out)
 	}

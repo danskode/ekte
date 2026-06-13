@@ -41,16 +41,19 @@ func Init() (*Config, error) {
 		return &Config{Enabled: true, Path: wikiPath}, nil
 	}
 
-	var cloneURL string
+	var cloneURL, branch string
 	if ask(r, "\nHar du et eksisterende wiki-repo?") {
 		fmt.Print("Git URL: ")
 		cloneURL = strings.TrimSpace(readLine(r))
 	} else {
 		cloneURL = templateRepo
+		if ask(r, "\nVil du starte med standard AIDD-indhold (færdige wiki-sider om AIDD)?") {
+			branch = "aidd"
+		}
 		fmt.Printf("\nKloner wiki-template fra %s...\n", cloneURL)
 	}
 
-	if err := cloneWiki(cloneURL, wikiPath); err != nil {
+	if err := cloneWiki(cloneURL, branch, wikiPath); err != nil {
 		return nil, fmt.Errorf("kunne ikke klone wiki: %w", err)
 	}
 
@@ -59,11 +62,17 @@ func Init() (*Config, error) {
 	return &Config{Enabled: true, Path: wikiPath}, nil
 }
 
-func cloneWiki(url, dest string) error {
+func cloneWiki(url, branch, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return err
 	}
-	cmd := exec.Command("git", "clone", url, dest)
+	args := []string{"clone"}
+	if branch != "" {
+		args = append(args, "--branch", branch)
+	}
+	// '--' sikrer at url/dest aldrig fortolkes som flag (argument injection).
+	args = append(args, "--", url, dest)
+	cmd := exec.Command("git", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

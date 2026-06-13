@@ -277,7 +277,7 @@ func (a *Agent) handleContext() []Event {
 	sb.WriteString("Kommandooversigt:\n")
 	sb.WriteString("  /remember <tekst>  — gem note i hukommelsen\n")
 	sb.WriteString("  /wiki \"spørgsmål\" — søg i simple-minded\n")
-	sb.WriteString("  /skills <navn>     — aktiver en skill\n")
+	sb.WriteString("  /skills <navn>     — aktiver en skill (catalog/show/install/update)\n")
 	sb.WriteString("  /security          — vis sikkerhedsstatus\n")
 
 	return []Event{{Type: EventSystem, Content: sb.String()}}
@@ -367,6 +367,12 @@ func (a *Agent) handleSkills(arg string) []Event {
 	if strings.HasPrefix(arg, "install ") {
 		return a.handleSkillsInstall(strings.TrimPrefix(arg, "install "))
 	}
+	if strings.HasPrefix(arg, "show ") {
+		return a.handleSkillsShow(strings.TrimSpace(strings.TrimPrefix(arg, "show ")))
+	}
+	if arg == "update" || strings.HasPrefix(arg, "update ") {
+		return a.handleSkillsUpdate(strings.TrimSpace(strings.TrimPrefix(arg, "update")))
+	}
 	if len(a.cfg.Skills) == 0 {
 		return []Event{{Type: EventSystem, Content: "Ingen skills installeret endnu.\nBrug '/skills catalog' for at se hvad der er tilgængeligt i SKILLeton."}}
 	}
@@ -390,18 +396,53 @@ func (a *Agent) handleSkillsCatalog() []Event {
 
 	skillsDir := filepath.Join(a.cfg.WorkDir, ".ekte", "skills")
 	installed := skill.InstalledNames(skillsDir)
+	versions := skill.InstalledVersions(skillsDir)
 
 	var sb strings.Builder
 	sb.WriteString("SKILLeton — tilgængelige skills\n\n")
+	if cat.Version > skill.CatalogSchema {
+		sb.WriteString(fmt.Sprintf("⚠ Kataloget bruger skema v%d; denne ekte-version forventer v%d.\n  Opdatér ekte for fuld understøttelse.\n\n", cat.Version, skill.CatalogSchema))
+	}
 	for _, s := range cat.Skills {
 		marker := "  "
+		status := ""
 		if installed[s.Name] {
 			marker = "✓ "
+			if s.Version != "" && skill.VersionNewer(s.Version, versions[s.Name]) {
+				status = fmt.Sprintf("  ⬆ opdatering: v%s → v%s", versions[s.Name], s.Version)
+			}
 		}
-		sb.WriteString(fmt.Sprintf("%s%-20s %s\n", marker, s.Name, s.Description))
+		if len(s.Requires) > 0 {
+			status += "  [obligatorisk: " + strings.Join(s.Requires, ", ") + "]"
+		}
+		sb.WriteString(fmt.Sprintf("%s%-20s %s%s\n", marker, s.Name, s.Description, status))
 	}
-	sb.WriteString("\nInstallér med: /skills install <navn>")
+	sb.WriteString("\nLæs igennem:  /skills show <navn>")
+	sb.WriteString("\nInstallér:    /skills install <navn>")
+	sb.WriteString("\nOpdatér:      /skills update <navn>  (eller --all)")
 	return []Event{{Type: EventSystem, Content: sb.String()}}
+}
+
+func (a *Agent) handleSkillsShow(name string) []Event {
+	if name == "" {
+		return []Event{{Type: EventSystem, Content: "Brug: /skills show <navn>"}}
+	}
+	cat, err := skill.FetchCatalog()
+	if err != nil {
+		return []Event{{Type: EventError, Content: "Kunne ikke hente SKILLeton-katalog: " + err.Error()}}
+	}
+	for _, entry := range cat.Skills {
+		if entry.Name == name {
+			content, err := skill.FetchSkillContent(entry)
+			if err != nil {
+				return []Event{{Type: EventError, Content: "Kunne ikke hente skill: " + err.Error()}}
+			}
+			header := fmt.Sprintf("─── %s ─── (læser kun; ikke installeret)\n\n", name)
+			footer := "\n\n─── Installér med: /skills install " + name
+			return []Event{{Type: EventSystem, Content: header + content + footer}}
+		}
+	}
+	return []Event{{Type: EventSystem, Content: "Skill ikke fundet i SKILLeton: " + name + "\nBrug '/skills catalog' for at se hvad der er tilgængeligt."}}
 }
 
 func (a *Agent) handleSkillsInstall(name string) []Event {
@@ -417,7 +458,7 @@ func (a *Agent) handleSkillsInstall(name string) []Event {
 	for _, entry := range cat.Skills {
 		if entry.Name == name {
 			if skill.InstalledNames(skillsDir)[name] {
-				return []Event{{Type: EventSystem, Content: "✓ " + name + " er allerede installeret"}}
+				return []Event{{Type: EventSystem, Content: "✓ " + name + " er allerede installeret.\nBrug '/skills update " + name + "' for at hente nyeste version."}}
 			}
 			if err := skill.DownloadSkill(entry, skillsDir); err != nil {
 				return []Event{{Type: EventError, Content: "Download fejlede: " + err.Error()}}
@@ -426,6 +467,69 @@ func (a *Agent) handleSkillsInstall(name string) []Event {
 		}
 	}
 	return []Event{{Type: EventSystem, Content: "Skill ikke fundet i SKILLeton: " + name + "\nBrug '/skills catalog' for at se hvad der er tilgængeligt."}}
+}
+
+func (a *Agent) handleSkillsUpdate(name string) []Event {
+	cat, err := skill.FetchCatalog()
+	if err != nil {
+		return []Event{{Type: EventError, Content: "Kunne ikke hente SKILLeton-katalog: " + err.Error()}}
+	}
+	skillsDir := filepath.Join(a.cfg.WorkDir, ".ekte", "skills")
+	installed := skill.InstalledNames(skillsDir)
+	versions := skill.InstalledVersions(skillsDir)
+
+	byName := map[string]skill.CatalogEntry{}
+	for _, e := range cat.Skills {
+		byName[e.Name] = e
+	}
+
+	var targets []string
+	if name == "" || name == "--all" {
+		for n := range installed {
+			if _, ok := byName[n]; ok {
+				targets = append(targets, n)
+			}
+		}
+		if len(targets) == 0 {
+			return []Event{{Type: EventSystem, Content: "Ingen installerede skills fra SKILLeton at opdatere."}}
+		}
+	} else {
+		if !installed[name] {
+			return []Event{{Type: EventSystem, Content: name + " er ikke installeret. Brug '/skills install " + name + "'."}}
+		}
+		if _, ok := byName[name]; !ok {
+			return []Event{{Type: EventSystem, Content: name + " findes ikke i SKILLeton-kataloget."}}
+		}
+		targets = []string{name}
+	}
+
+	var sb strings.Builder
+	var changed bool
+	for _, n := range targets {
+		entry := byName[n]
+		if entry.Version != "" && !skill.VersionNewer(entry.Version, versions[n]) {
+			sb.WriteString(fmt.Sprintf("  %-20s allerede nyeste (v%s)\n", n, versions[n]))
+			continue
+		}
+		if err := skill.DownloadSkill(entry, skillsDir); err != nil {
+			sb.WriteString(fmt.Sprintf("  %-20s ⚠ fejl: %v\n", n, err))
+			continue
+		}
+		changed = true
+		from := versions[n]
+		if from == "" {
+			from = "?"
+		}
+		to := entry.Version
+		if to == "" {
+			to = "?"
+		}
+		sb.WriteString(fmt.Sprintf("  %-20s ✓ opdateret v%s → v%s\n", n, from, to))
+	}
+	if changed {
+		sb.WriteString("\nGenstart ekte for at indlæse de opdaterede skills.")
+	}
+	return []Event{{Type: EventSystem, Content: strings.TrimRight(sb.String(), "\n")}}
 }
 
 func (a *Agent) handleSpec(ctx context.Context, arg string) []Event {

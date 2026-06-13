@@ -40,3 +40,6 @@ Thumbs.db
 # ekte — private filer (tilføjet automatisk)
 .ekte/memory/
 .ekte/plans/
+
+# Lokal agent-instruktion (beholdes lokalt, deles ikke — offentlig doc i CONTRIBUTING.md)
+CLAUDE.md
