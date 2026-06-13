@@ -156,7 +156,10 @@ fi
 
 # Pre-push mode: bloker ved medium+ fund
 if ! $FULL_REVIEW && [[ "$RISK" =~ ^(medium|high|critical)$ ]]; then
-  if [ -c /dev/tty ]; then
+  # [ -c /dev/tty ] er ikke nok: noden kan findes uden at kunne åbnes
+  # (ingen controlling terminal → open() fejler med ENXIO). Prøv reelt at
+  # åbne den, ellers falder vi pænt til "ingen terminal"-grenen nedenfor.
+  if { : </dev/tty; } 2>/dev/null; then
     read -rp "Push alligevel? [j/N] " CONFIRM </dev/tty
     if [[ ! "$CONFIRM" =~ ^[jJ]$ ]]; then
       echo "Push afbrudt."
