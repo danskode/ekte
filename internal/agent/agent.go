@@ -1807,8 +1807,24 @@ func (a *Agent) streamGoal(ctx context.Context, goalDesc string, ch chan<- Event
 		ch <- Event{Type: EventSystem, Content: "⛔ goal.check_hook er ikke konfigureret.\n\nTilføj til .ekte/config.yaml:\n\n  goal:\n    check_hook: compile\n    max_iterations: 10"}
 		return
 	}
-	if _, ok := a.cfg.Hooks[cfg.CheckHook]; !ok {
+	checkHC, ok := a.cfg.Hooks[cfg.CheckHook]
+	if !ok {
 		ch <- Event{Type: EventSystem, Content: fmt.Sprintf("⛔ check_hook '%s' ikke fundet i hooks-konfigurationen.", cfg.CheckHook)}
+		return
+	}
+	// check_hook køres programmatisk i HVER iteration (handleHook nedenfor) —
+	// den passerer IKKE per-kald-confirmen som LLM-initierede run_hook gør.
+	// Et klonet repos auto-wirede check_hook (fx 'ekte springcheck' →
+	// mvn/spring-boot:run, eller en vilkårlig kommando) ville derved auto-
+	// eksekvere uden samtykke i /goal. Gate kommandoen bag samme tillidsmodel
+	// som run_hook; fail closed hvis utroet (CWE-78/829).
+	if a.cfg.HookTrusted != nil && !a.cfg.HookTrusted(checkHC.Cmd) {
+		ch <- Event{Type: EventSystem, Content: fmt.Sprintf(
+			"⛔ goal.check_hook '%s' (%s) er ikke betroet — kører ikke autonomt.\n"+
+				"check_hook eksekverer hver iteration uden bekræftelse. Godkend hooket\n"+
+				"først interaktivt med /hook %s (samtykket gemmes), eller sæt\n"+
+				"EKTE_ALLOW_LOCAL_HOOKS=1 hvis du stoler på dette repo.",
+			cfg.CheckHook, checkHC.Cmd, cfg.CheckHook)}
 		return
 	}
 

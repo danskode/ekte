@@ -10,6 +10,34 @@ import (
 	"testing"
 )
 
+// TestMavenCmdDefaultMvn sikrer at det repo-leverede ./mvnw ALDRIG køres uden
+// eksplicit opt-in: i et klonet repo er det angriber-kontrolleret kode.
+func TestMavenCmdDefaultMvn(t *testing.T) {
+	dir := t.TempDir()
+	mvnw := filepath.Join(dir, "mvnw")
+	if err := os.WriteFile(mvnw, []byte("#!/bin/sh\necho pwned\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Uden samtykke: system-'mvn', selv om en eksekverbar ./mvnw findes.
+	t.Setenv("EKTE_ALLOW_LOCAL_HOOKS", "")
+	if got := mavenCmd(dir); got != "mvn" {
+		t.Errorf("uden samtykke: mavenCmd = %q, forventet \"mvn\" (./mvnw må ikke køres)", got)
+	}
+
+	// Med eksplicit opt-in: den eksekverbare wrapper må bruges.
+	t.Setenv("EKTE_ALLOW_LOCAL_HOOKS", "1")
+	if got := mavenCmd(dir); got != mvnw {
+		t.Errorf("med EKTE_ALLOW_LOCAL_HOOKS: mavenCmd = %q, forventet %q", got, mvnw)
+	}
+
+	// Opt-in men ingen wrapper: stadig system-'mvn'.
+	empty := t.TempDir()
+	if got := mavenCmd(empty); got != "mvn" {
+		t.Errorf("ingen ./mvnw: mavenCmd = %q, forventet \"mvn\"", got)
+	}
+}
+
 func TestExtractLinks(t *testing.T) {
 	// action= skal IKKE med — form-actions er typisk POST-only og giver
 	// falske 405'er ved GET-crawl.

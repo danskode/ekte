@@ -23,6 +23,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/danskode/ekte/internal/consent"
 )
 
 type Report struct {
@@ -169,10 +171,17 @@ func findSingleMavenSubdir(dir string) string {
 	return found
 }
 
-// mavenCmd foretrækker projektets egen wrapper (./mvnw) over global mvn.
+// mavenCmd vælger maven-binær. Projektets egen wrapper (./mvnw) er et
+// repo-leveret shell-script: i et klonet, ubetroet repo er det angriber-
+// kontrolleret kode, og springcheck (auto-wirebar som goal.check_hook) ville
+// ellers eksekvere det uden samtykke (CWE-78/CWE-829). Derfor bruges system-
+// 'mvn' som sikker default; ./mvnw køres kun når EKTE_ALLOW_LOCAL_HOOKS er sat
+// — samme eksplicitte opt-in som gælder for projekt-lokale hooks.
 func mavenCmd(dir string) string {
-	if w := filepath.Join(dir, "mvnw"); isExecutable(w) {
-		return w
+	if consent.AllowLocalHooks() {
+		if w := filepath.Join(dir, "mvnw"); isExecutable(w) {
+			return w
+		}
 	}
 	return "mvn"
 }

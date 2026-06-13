@@ -161,6 +161,13 @@ kommandoen bag et betroet navn, kræves nyt samtykke. Bemærk at
 `EKTE_ALLOW_LOCAL_PROVIDER` *ikke* åbner for hooks — de to tilladelser er
 bevidst adskilt.
 
+Samme gating gælder `goal.check_hook`, som ellers kører programmatisk i hver
+`/goal`-iteration uden per-kald-bekræftelse: er check-hookets kommando ikke
+betroet, nægter `/goal` at starte. Og `ekte springcheck` kører kun projektets
+eget `./mvnw` (et repo-leveret script) hvis `EKTE_ALLOW_LOCAL_HOOKS` er sat —
+ellers bruges system-`mvn`, så et klonet repo ikke kan eksekvere vilkårlig kode
+via wrapper-scriptet.
+
 ---
 
 ## Konfiguration
