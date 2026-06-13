@@ -7,6 +7,65 @@ import (
 	"testing"
 )
 
+func TestSplitChunks(t *testing.T) {
+	page := Page{Path: "concepts/x.md", Content: "---\ntype: concept\n---\n# Titel\nintro-tekst\n\n## Definition\ndef-tekst\n\n## Detaljer\ndetalje-tekst\n"}
+	chunks := splitChunks(page)
+	if len(chunks) != 3 {
+		t.Fatalf("forventede 3 chunks (preamble + 2 sektioner), fik %d", len(chunks))
+	}
+	if chunks[0].Heading != "" || !strings.Contains(chunks[0].Body, "intro-tekst") {
+		t.Errorf("preamble forkert: %+v", chunks[0])
+	}
+	if chunks[1].Heading != "## Definition" || !strings.Contains(chunks[1].Body, "def-tekst") {
+		t.Errorf("sektion 1 forkert: %+v", chunks[1])
+	}
+	// Frontmatter må ikke lække ind i nogen chunk.
+	for _, c := range chunks {
+		if strings.Contains(c.Body, "type: concept") {
+			t.Errorf("frontmatter lækkede ind i chunk: %+v", c)
+		}
+	}
+}
+
+func TestScoreChunkHeadingWeight(t *testing.T) {
+	withHeading := Chunk{Heading: "## Mutex", Body: "tekst"}
+	bodyOnly := Chunk{Heading: "## Andet", Body: "mutex"}
+	kw := []string{"mutex"}
+	if scoreChunk(withHeading, kw) <= scoreChunk(bodyOnly, kw) {
+		t.Errorf("overskrift-match bør veje tungere: head=%d body=%d",
+			scoreChunk(withHeading, kw), scoreChunk(bodyOnly, kw))
+	}
+}
+
+func TestBuildBudgetedContextPicksRelevantSection(t *testing.T) {
+	// Relevant sektion ligger til sidst — head-trunkering ville misse den.
+	page := Page{Path: "concepts/x.md", Content: "# Titel\n## Irrelevant\n" +
+		strings.Repeat("blah ", 50) + "\n## Mutex\nmutex og rwmutex forklaret her\n"}
+	body, paths := BuildBudgetedContext("mutex rwmutex", []Page{page}, 100)
+	if body == "" {
+		t.Fatal("forventede ikke-tom kontekst")
+	}
+	if !strings.Contains(body, "Mutex") || !strings.Contains(body, "rwmutex forklaret") {
+		t.Errorf("forventede at den relevante Mutex-sektion blev valgt, fik:\n%s", body)
+	}
+	if len(paths) != 1 || paths[0] != "concepts/x.md" {
+		t.Errorf("forventede proveniens concepts/x.md, fik %v", paths)
+	}
+	// Proveniens-header skal vise side › sektion.
+	if !strings.Contains(body, "concepts/x.md › Mutex") {
+		t.Errorf("forventede proveniens-header, fik:\n%s", body)
+	}
+}
+
+func TestBuildBudgetedContextEmpty(t *testing.T) {
+	if body, paths := BuildBudgetedContext("noget", nil, 100); body != "" || paths != nil {
+		t.Errorf("tom input bør give tomt resultat, fik body=%q paths=%v", body, paths)
+	}
+	if body, _ := BuildBudgetedContext("noget", []Page{{Path: "a.md", Content: "x"}}, 0); body != "" {
+		t.Errorf("nul-budget bør give tom kontekst, fik %q", body)
+	}
+}
+
 func TestHasSubstantiveQuery(t *testing.T) {
 	cases := []struct {
 		in   string

@@ -515,45 +515,21 @@ func (a *Agent) streamChat(ctx context.Context, input string, ch chan<- Event) {
 				a.log().Warn("wiki-kontekst udeladt — intet token-budget tilbage", "tokens_est", tokEst, "ctx_size", effectiveCtx)
 				pages = nil
 			}
-			// Begræns antal sider — Query kan returnere mange, og selv afkortede
-			// sider summer op. De første er de mest relevante.
+			// Begræns antal kandidat-sider — Query kan returnere mange. De første er
+			// de mest relevante; chunk-udvælgelsen henter de bedste afsnit på tværs.
 			const maxWikiPages = 6
 			if len(pages) > maxWikiPages {
 				pages = pages[:maxWikiPages]
 			}
-			maxPageExcerptChars := 1200
-			if len(pages) > 0 {
-				perPage := (budgetTokens * 4) / len(pages)
-				if perPage < 200 {
-					perPage = 200
-				}
-				if perPage < maxPageExcerptChars {
-					maxPageExcerptChars = perPage
-				}
-			}
 
-			if len(pages) > 0 {
+			// Vælg de mest relevante chunks (afsnit/sektioner) inden for budgettet i
+			// stedet for at head-trunkere hele sider — relevant indhold midt på en
+			// side ryger ellers tabt.
+			if body, _ := wiki.BuildBudgetedContext(input, pages, budgetTokens); body != "" {
 				var ctxBuilder strings.Builder
-				var paths []string
-				ctxBuilder.WriteString("VIGTIG INSTRUKTION: Følgende wiki-sider er projektets kilde til sandhed.\n")
+				ctxBuilder.WriteString("VIGTIG INSTRUKTION: Følgende wiki-uddrag er projektets kilde til sandhed.\n")
 				ctxBuilder.WriteString("Kodestandarder, arkitektur og ønsker herfra SKAL følges og prioriteres over generel viden.\n\n")
-				for _, p := range pages {
-					excerpt := p.Content
-					truncated := false
-					if len(excerpt) > maxPageExcerptChars {
-						excerpt = excerpt[:maxPageExcerptChars]
-						if idx := strings.LastIndex(excerpt, "\n"); idx > maxPageExcerptChars/2 {
-							excerpt = excerpt[:idx]
-						}
-						truncated = true
-					}
-					note := ""
-					if truncated {
-						note = "\n[side afkortet — brug /wiki for fuld version]"
-					}
-					ctxBuilder.WriteString(fmt.Sprintf("=== %s ===\n%s%s\n\n", p.Path, excerpt, note))
-					paths = append(paths, p.Path)
-				}
+				ctxBuilder.WriteString(body)
 				msgs = append([]provider.Message{{Role: "system", Content: ctxBuilder.String()}}, msgs...)
 				wikiIdx = 0
 				tokEst = estimateTokens(msgs)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -233,6 +234,128 @@ func buildContext(question string, index string, pages []Page) string {
 		sb.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", p.Path, p.Content))
 	}
 	return sb.String()
+}
+
+// Chunk er et afsnit/sektion af en wiki-side med proveniens (sti + overskrift).
+type Chunk struct {
+	Path    string
+	Heading string // fx "## Definition" ("" for preamble før første ##)
+	Body    string
+	Score   int
+}
+
+// splitChunks deler en side i chunks ved '##'-overskrifter. Frontmatter og alt
+// før første '##' samles i en preamble-chunk (Heading == "").
+func splitChunks(p Page) []Chunk {
+	lines := strings.Split(stripFrontmatter(p.Content), "\n")
+	var chunks []Chunk
+	cur := Chunk{Path: p.Path}
+	var body []string
+	flush := func() {
+		text := strings.TrimSpace(strings.Join(body, "\n"))
+		if text != "" {
+			cur.Body = text
+			chunks = append(chunks, cur)
+		}
+		body = nil
+	}
+	for _, line := range lines {
+		if strings.HasPrefix(line, "## ") {
+			flush()
+			cur = Chunk{Path: p.Path, Heading: strings.TrimSpace(line)}
+			continue
+		}
+		body = append(body, line)
+	}
+	flush()
+	return chunks
+}
+
+func stripFrontmatter(content string) string {
+	if !strings.HasPrefix(content, "---") {
+		return content
+	}
+	rest := content[3:]
+	if idx := strings.Index(rest, "\n---"); idx != -1 {
+		return strings.TrimLeft(rest[idx+4:], "\n")
+	}
+	return content
+}
+
+func scoreChunk(c Chunk, keywords []string) int {
+	hay := strings.ToLower(c.Heading + "\n" + c.Body)
+	headLower := strings.ToLower(c.Heading)
+	score := 0
+	for _, kw := range keywords {
+		score += strings.Count(hay, kw)
+		if strings.Contains(headLower, kw) {
+			score += 2 // overskrift-match vægter mere
+		}
+	}
+	return score
+}
+
+// BuildBudgetedContext rangerer chunks fra de matchede sider efter relevans for
+// query og bygger en kontekst-blok inden for budgetTokens (≈ ×4 tegn). Hver chunk
+// får en proveniens-header ("sti › overskrift"), så det er gennemskueligt hvilken
+// side+sektion der blev valgt. Returnerer blokken og de anvendte sidestier i
+// inkluderingsrækkefølge. Uafgjorte scores bevarer dokumentorden (stabil).
+func BuildBudgetedContext(query string, pages []Page, budgetTokens int) (string, []string) {
+	if budgetTokens < 1 || len(pages) == 0 {
+		return "", nil
+	}
+	keywords := strings.Fields(extractKeywords(query))
+
+	var chunks []Chunk
+	for _, p := range pages {
+		for _, c := range splitChunks(p) {
+			c.Score = scoreChunk(c, keywords)
+			chunks = append(chunks, c)
+		}
+	}
+	if len(chunks) == 0 {
+		return "", nil
+	}
+	sort.SliceStable(chunks, func(i, j int) bool { return chunks[i].Score > chunks[j].Score })
+
+	budgetChars := budgetTokens * 4
+	var sb strings.Builder
+	seen := map[string]bool{}
+	var paths []string
+	used := 0
+	for _, c := range chunks {
+		header := "=== " + c.Path
+		if c.Heading != "" {
+			header += " › " + strings.TrimPrefix(c.Heading, "## ")
+		}
+		header += " ===\n"
+		remaining := budgetChars - used
+		if remaining <= len(header)+80 {
+			break // ikke plads til en meningsfuld chunk mere
+		}
+		bodyText := c.Body
+		full := true
+		avail := remaining - len(header) - 2
+		if len(bodyText) > avail {
+			bodyText = bodyText[:avail]
+			if idx := strings.LastIndex(bodyText, "\n"); idx > avail/2 {
+				bodyText = bodyText[:idx]
+			}
+			bodyText += "\n[afkortet — brug /wiki for fuld side]"
+			full = false
+		}
+		block := header + bodyText + "\n\n"
+		sb.WriteString(block)
+		used += len(block)
+		if !seen[c.Path] {
+			seen[c.Path] = true
+			paths = append(paths, c.Path)
+		}
+		if !full {
+			break // budget brugt op
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n"), paths
 }
 
 // HasSubstantiveQuery returnerer true hvis input indeholder mindst 2

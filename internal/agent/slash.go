@@ -16,6 +16,7 @@ import (
 	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/tools"
+	"github.com/danskode/ekte/internal/wiki"
 )
 
 func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
@@ -625,55 +626,26 @@ func (a *Agent) handleWiki(ctx context.Context, arg string) []Event {
 		return []Event{{Type: EventError, Content: "Wiki-fejl: " + err.Error()}}
 	}
 
-	// Byg en trunkeret wiki-kontekst med samme budget-logik som streamChat.
-	// Den rå buildContext-streng (fuld sideindhold) kan nemt sprænge LM Studios
-	// kontekstvindue og give "tokens to keep > context length"-fejl.
+	// Byg en budgetteret wiki-kontekst med samme logik som streamChat: vælg de
+	// mest relevante chunks (afsnit/sektioner) frem for at head-trunkere hele
+	// sider — ellers kan fuld sideindhold sprænge små kontekstvinduer (LM Studio:
+	// "tokens to keep > context length"), og relevant indhold midt på en side tabes.
 	baseMsgs := trimHistory(a.messages, maxHistoryMessages)
 	baseTok := estimateTokens(baseMsgs)
 
-	// Beregn max tegn per wiki-side. Vi bruger ContextSize hvis den er sat, ellers
-	// et konservativt fast loft. ContextSize afspejler muligvis ikke præcist hvad
-	// LM Studio faktisk har indlæst som n_ctx — brug 85% som sikkerhedsmargen.
 	effectiveCtx := a.cfg.ContextSize
 	if effectiveCtx <= 0 {
 		effectiveCtx = 4096 // konservativt fald-tilbage
 	}
-	maxPageExcerptChars := 1200 // fast loft: ca. 300 tokens/side
-	if len(pages) > 0 {
-		// wiki må bruge maks 35% af effektiv kontekst minus den allerede brugte plads
-		budgetTokens := int(float64(effectiveCtx)*0.35) - baseTok
-		if budgetTokens < 200 {
-			budgetTokens = 200
-		}
-		perPage := (budgetTokens * 4) / len(pages) // tokens → tegn
-		if perPage < 200 {
-			perPage = 200
-		}
-		if perPage < maxPageExcerptChars {
-			maxPageExcerptChars = perPage
-		}
+	budgetTokens := int(float64(effectiveCtx)*0.35) - baseTok
+	if budgetTokens < 200 {
+		budgetTokens = 200
 	}
 
+	body, paths := wiki.BuildBudgetedContext(arg, pages, budgetTokens)
 	var ctxBuilder strings.Builder
-	var paths []string
-	ctxBuilder.WriteString(fmt.Sprintf("Relevante wiki-sider for '%s':\n\n", arg))
-	for _, p := range pages {
-		excerpt := p.Content
-		truncated := false
-		if len(excerpt) > maxPageExcerptChars {
-			excerpt = excerpt[:maxPageExcerptChars]
-			if idx := strings.LastIndex(excerpt, "\n"); idx > maxPageExcerptChars/2 {
-				excerpt = excerpt[:idx]
-			}
-			truncated = true
-		}
-		note := ""
-		if truncated {
-			note = "\n[side afkortet — brug /wiki for fuld version]"
-		}
-		ctxBuilder.WriteString(fmt.Sprintf("--- %s ---\n%s%s\n\n", p.Path, excerpt, note))
-		paths = append(paths, p.Path)
-	}
+	ctxBuilder.WriteString(fmt.Sprintf("Relevante wiki-uddrag for '%s':\n\n", arg))
+	ctxBuilder.WriteString(body)
 
 	msgs := append([]provider.Message{{Role: "system", Content: ctxBuilder.String()}}, baseMsgs...)
 	msgs = append(msgs, provider.Message{Role: "user", Content: arg})
