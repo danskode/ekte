@@ -34,7 +34,7 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 
 	switch cmd {
 	case "/hjælp", "/help":
-		return []Event{{Type: EventSystem, Content: helpText()}}
+		return []Event{{Type: EventSystem, Content: a.helpText()}}
 
 	case "/clear":
 		// Gendan baseline i stedet for at nulstille alt — ellers fortsætter
@@ -1209,13 +1209,31 @@ var builtinCommands = [][2]string{
 	{"/hjælp", "vis denne hjælp"},
 }
 
-func helpText() string {
+func (a *Agent) helpText() string {
 	var sb strings.Builder
 	sb.WriteString("Slash commands:\n")
 	for _, c := range builtinCommands {
-		if c[1] != "" {
+		if c[1] != "" && a.commandAvailable(c[0]) {
 			sb.WriteString(fmt.Sprintf("  %-30s — %s\n", c[0], c[1]))
 		}
 	}
 	return sb.String()
+}
+
+// commandAvailable afgør om en slash command giver mening i den nuværende
+// kontekst — bruges til at gøre autocomplete og /hjælp kontekst-aware, så kun
+// relevante kommandoer vises. Skill-aktiverings-kommandoer (/<navn>) er allerede
+// kontekst-aware: kun installerede skills listes i Commands().
+func (a *Agent) commandAvailable(cmd string) bool {
+	switch {
+	case strings.HasPrefix(cmd, "/wiki"):
+		return a.cfg.Wiki != nil // wiki sættes op via 'ekte init'
+	case cmd == "/hook [navn]" || strings.HasPrefix(cmd, "/hook fjern"):
+		return len(a.cfg.Hooks) > 0 // '/hook add' forbliver tilgængelig
+	case cmd == "/review" || strings.HasPrefix(cmd, "/orchestrate") || strings.HasPrefix(cmd, "/goal"):
+		return a.cfg.Provider != nil
+	case cmd == "/plan godkend" || cmd == "/plan vis" || cmd == "/plan afvis":
+		return a.planMode
+	}
+	return true
 }

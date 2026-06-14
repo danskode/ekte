@@ -302,6 +302,9 @@ func (a *Agent) Commands() []string {
 	for _, c := range builtinCommands {
 		// Behold hele strengen til autocomplete (fx "/plan godkend")
 		full := c[0]
+		if !a.commandAvailable(full) {
+			continue // kontekst-aware: skjul kommandoer der ikke giver mening nu
+		}
 		// Fjern argument-suffix for at også matche på kun kommandodelene
 		bare := strings.Fields(full)[0]
 		if !seen[full] {
