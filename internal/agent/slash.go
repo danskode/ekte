@@ -17,6 +17,7 @@ import (
 	"github.com/danskode/ekte/internal/orchestrator"
 	"github.com/danskode/ekte/internal/provider"
 	"github.com/danskode/ekte/internal/review"
+	"github.com/danskode/ekte/internal/secret"
 	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/tools"
@@ -455,11 +456,16 @@ func (a *Agent) handleReview(ctx context.Context) []Event {
 	if strings.TrimSpace(diff) == "" {
 		return []Event{{Type: EventSystem, Content: "Ingen ændringer at reviewe (arbejdstræ rent)."}}
 	}
+	diff, redacted := secret.Redact(diff)
 	res, raw, err := review.Run(ctx, a.cfg.Provider, diff, "arbejdstræ vs HEAD")
 	if err != nil {
 		return []Event{{Type: EventSystem, Content: "Kunne ikke fortolke modellens review-svar (lokale modeller kan give upålidelig JSON):\n\n" + raw}}
 	}
-	return []Event{{Type: EventSystem, Content: review.Format(res)}}
+	content := review.Format(res)
+	if redacted > 0 {
+		content = fmt.Sprintf("(%d potentielle secret(s) redakteret før afsendelse)\n\n", redacted) + content
+	}
+	return []Event{{Type: EventSystem, Content: content}}
 }
 
 func (a *Agent) handleSkillsLibrary() []Event {

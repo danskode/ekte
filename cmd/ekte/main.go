@@ -22,6 +22,7 @@ import (
 	"github.com/danskode/ekte/internal/onboarding"
 	"github.com/danskode/ekte/internal/provider"
 	"github.com/danskode/ekte/internal/review"
+	"github.com/danskode/ekte/internal/secret"
 	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/springcheck"
@@ -993,6 +994,13 @@ func runReview() {
 	if derr != nil {
 		fmt.Fprintln(os.Stderr, "ekte review: kunne ikke hente git-diff:", derr)
 		os.Exit(2)
+	}
+	diff, redacted := secret.Redact(diff)
+	if redacted > 0 {
+		fmt.Fprintf(os.Stderr, "ekte review: %d potentielle secret(s) redakteret før afsendelse — overvej et dedikeret secret-scan.\n", redacted)
+	}
+	if !consent.IsPrivateURL(cfg.BaseURL) {
+		fmt.Fprintln(os.Stderr, "ekte review: diffen sendes til en ekstern provider (kun redakteret indhold).")
 	}
 	res, raw, err := review.Run(context.Background(), p, diff, label)
 	if err != nil {
