@@ -463,7 +463,7 @@ func (a *Agent) handleReview(ctx context.Context) []Event {
 	}
 	content := review.Format(res)
 	if redacted > 0 {
-		content = fmt.Sprintf("(%d potentielle secret(s) redakteret før afsendelse)\n\n", redacted) + content
+		content = fmt.Sprintf("(%d potentielle secret(s) redakteret — best-effort, ikke en garanti)\n\n", redacted) + content
 	}
 	return []Event{{Type: EventSystem, Content: content}}
 }

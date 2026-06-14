@@ -997,7 +997,7 @@ func runReview() {
 	}
 	diff, redacted := secret.Redact(diff)
 	if redacted > 0 {
-		fmt.Fprintf(os.Stderr, "ekte review: %d potentielle secret(s) redakteret før afsendelse — overvej et dedikeret secret-scan.\n", redacted)
+		fmt.Fprintf(os.Stderr, "ekte review: %d potentielle secret(s) redakteret (best-effort heuristik — IKKE en garanti; kør et dedikeret secret-scan som gitleaks/trufflehog).\n", redacted)
 	}
 	if !consent.IsPrivateURL(cfg.BaseURL) {
 		fmt.Fprintln(os.Stderr, "ekte review: diffen sendes til en ekstern provider (kun redakteret indhold).")
