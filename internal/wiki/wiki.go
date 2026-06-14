@@ -95,7 +95,10 @@ func (w *Wiki) SavePage(pageType, title, content string) (string, error) {
 
 // SaveRaw gemmer markdown-indhold direkte på den angivne relative sti under wiki-roden.
 func (w *Wiki) SaveRaw(relPath, content string) (string, error) {
-	full := filepath.Join(w.root, relPath)
+	full, err := w.safeJoin(relPath)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
 		return "", err
 	}
@@ -234,6 +237,28 @@ func buildContext(question string, index string, pages []Page) string {
 		sb.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", p.Path, p.Content))
 	}
 	return sb.String()
+}
+
+// safeJoin sammensætter relPath under wiki-roden og afviser absolutte stier samt
+// stier der escaper roden (path traversal, CWE-22). relPath kan stamme fra en
+// LLM-foreslået sti (/wiki-get → /wiki-gem), så den må ikke betros.
+func (w *Wiki) safeJoin(relPath string) (string, error) {
+	if filepath.IsAbs(relPath) {
+		return "", fmt.Errorf("absolut sti ikke tilladt: %s", relPath)
+	}
+	rootAbs, err := filepath.Abs(w.root)
+	if err != nil {
+		return "", err
+	}
+	// Kanoniser roden hvis den (eller en forælder) er et symlink.
+	if real, err := filepath.EvalSymlinks(rootAbs); err == nil {
+		rootAbs = real
+	}
+	full := filepath.Clean(filepath.Join(rootAbs, relPath))
+	if full != rootAbs && !strings.HasPrefix(full, rootAbs+string(os.PathSeparator)) {
+		return "", fmt.Errorf("sti uden for wiki-roden: %s", relPath)
+	}
+	return full, nil
 }
 
 // Chunk er et afsnit/sektion af en wiki-side med proveniens (sti + overskrift).

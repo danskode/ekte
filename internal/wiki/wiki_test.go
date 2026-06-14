@@ -7,6 +7,37 @@ import (
 	"testing"
 )
 
+func TestSafeJoinRejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	w := &Wiki{root: root}
+	bad := []string{"../evil.md", "../../tmp/evil.md", "wiki/../../escape.md", "/etc/passwd"}
+	for _, p := range bad {
+		if _, err := w.safeJoin(p); err == nil {
+			t.Errorf("safeJoin(%q) burde være afvist", p)
+		}
+	}
+	good := []string{"wiki/papers/x.md", "concepts/y.md"}
+	for _, p := range good {
+		full, err := w.safeJoin(p)
+		if err != nil {
+			t.Errorf("safeJoin(%q) burde være tilladt, fik fejl: %v", p, err)
+		}
+		if !strings.HasPrefix(full, root) {
+			t.Errorf("safeJoin(%q) = %q, forventet under %q", p, full, root)
+		}
+	}
+}
+
+func TestSaveRawRejectsTraversal(t *testing.T) {
+	w := &Wiki{root: t.TempDir()}
+	if _, err := w.SaveRaw("../escape.md", "x"); err == nil {
+		t.Error("SaveRaw burde afvise path traversal")
+	}
+	if _, err := w.SaveRaw("ok/note.md", "indhold"); err != nil {
+		t.Errorf("SaveRaw burde tillade sti under roden, fik: %v", err)
+	}
+}
+
 func TestSplitChunks(t *testing.T) {
 	page := Page{Path: "concepts/x.md", Content: "---\ntype: concept\n---\n# Titel\nintro-tekst\n\n## Definition\ndef-tekst\n\n## Detaljer\ndetalje-tekst\n"}
 	chunks := splitChunks(page)
