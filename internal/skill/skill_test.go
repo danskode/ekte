@@ -7,6 +7,31 @@ import (
 	"testing"
 )
 
+func TestLibraryEntryValidate(t *testing.T) {
+	ok := []LibraryEntry{
+		{Name: "tdd", File: "skills/tdd.md"},
+		{Name: "wiki-maintainer", File: "skills/wiki-maintainer.md"},
+		{Name: "a_b-1", File: ""},
+	}
+	for _, e := range ok {
+		if err := e.validate(); err != nil {
+			t.Errorf("validate(%+v) burde være ok, fik: %v", e, err)
+		}
+	}
+	bad := []LibraryEntry{
+		{Name: "../../.ekte/config", File: "skills/x.md"}, // path traversal i navn
+		{Name: "a/b", File: "skills/x.md"},                // separator i navn
+		{Name: "ok", File: "../../../etc/passwd"},          // traversal i fil
+		{Name: "ok", File: "/etc/passwd"},                  // absolut fil
+		{Name: "", File: "skills/x.md"},                    // tomt navn
+	}
+	for _, e := range bad {
+		if err := e.validate(); err == nil {
+			t.Errorf("validate(%+v) burde være afvist", e)
+		}
+	}
+}
+
 const gyldigSkill = `---
 name: tdd
 version: 1.0.0

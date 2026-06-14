@@ -119,9 +119,9 @@ func Run(dir string) (Result, error) {
 	fmt.Println("Valgte skills installeres permanent i .ekte/skills/ og kan bruges fremover.")
 	fmt.Println("(Aktivér en installeret skill pr. prompt med /skills <navn> — den nulstilles bagefter.)")
 	if ask(r, "Vil du vælge flere skills fra SKILLeton?") {
-		runSkillCatalog(r, skillsDir)
+		runSkillLibrary(r, skillsDir)
 	} else {
-		fmt.Println("  Du kan tilføje skills senere med '/skills catalog' i ekte.")
+		fmt.Println("  Du kan tilføje skills senere med '/skills library' i ekte.")
 	}
 
 	fmt.Println()
@@ -354,11 +354,11 @@ func runWikiSetup(r *bufio.Reader, dir string) string {
 // installRequired auto-installerer de skills i SKILLeton der er markeret som
 // obligatoriske for en given funktion (fx "harness" eller "wiki").
 func installRequired(skillsDir, feature string) {
-	cat, err := skill.FetchCatalog()
+	lib, err := skill.FetchLibrary()
 	if err != nil {
 		return
 	}
-	required := cat.RequiredFor(feature)
+	required := lib.RequiredFor(feature)
 	if len(required) == 0 {
 		return
 	}
@@ -376,19 +376,19 @@ func installRequired(skillsDir, feature string) {
 	}
 }
 
-func runSkillCatalog(r *bufio.Reader, skillsDir string) {
-	fmt.Println("   Henter katalog fra SKILLeton...")
-	cat, err := skill.FetchCatalog()
+func runSkillLibrary(r *bufio.Reader, skillsDir string) {
+	fmt.Println("   Henter bibliotek fra SKILLeton...")
+	lib, err := skill.FetchLibrary()
 	if err != nil {
-		fmt.Printf("   ⚠  Kunne ikke hente katalog: %v\n", err)
-		fmt.Println("   Prøv igen med '/skills catalog' i ekte.")
+		fmt.Printf("   ⚠  Kunne ikke hente bibliotek: %v\n", err)
+		fmt.Println("   Prøv igen med '/skills library' i ekte.")
 		return
 	}
 
 	installed := skill.InstalledNames(skillsDir)
 
 	fmt.Println()
-	for i, s := range cat.Skills {
+	for i, s := range lib.Skills {
 		marker := "  "
 		if installed[s.Name] {
 			marker = "✓ "
@@ -401,13 +401,13 @@ func runSkillCatalog(r *bufio.Reader, skillsDir string) {
 	fmt.Print("   → ")
 	input := strings.TrimSpace(readLine(r))
 	if input == "" {
-		fmt.Println("   Springer over. Brug '/skills catalog' i ekte for at tilføje senere.")
+		fmt.Println("   Springer over. Brug '/skills library' i ekte for at tilføje senere.")
 		return
 	}
 
 	count := 0
-	for _, idx := range parseChoices(input, len(cat.Skills)) {
-		entry := cat.Skills[idx]
+	for _, idx := range parseChoices(input, len(lib.Skills)) {
+		entry := lib.Skills[idx]
 		if installed[entry.Name] {
 			fmt.Printf("   ✓ %s allerede installeret\n", entry.Name)
 			continue

@@ -14,37 +14,37 @@ import (
 )
 
 // skillNameRe begrænser skill-navne til et sikkert tegnsæt. Navnet bruges til at
-// danne filstien i skillsDir, og kataloget er fjernhentet (ubetroet) — så et
+// danne filstien i skillsDir, og biblioteket er fjernhentet (ubetroet) — så et
 // navn med stiseparatorer eller '..' må aldrig kunne skrive uden for mappen.
 var skillNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-// validate afviser katalog-entries hvis navn/fil-sti ikke er sikre at bruge til
+// validate afviser bibliotek-entries hvis navn/fil-sti ikke er sikre at bruge til
 // filskrivning eller URL-konstruktion (CWE-22 path traversal via supply-chain).
-func (e CatalogEntry) validate() error {
+func (e LibraryEntry) validate() error {
 	if !skillNameRe.MatchString(e.Name) {
-		return fmt.Errorf("ugyldigt skill-navn i katalog: %q", e.Name)
+		return fmt.Errorf("ugyldigt skill-navn i bibliotek: %q", e.Name)
 	}
 	if e.File != "" {
 		if strings.HasPrefix(e.File, "/") || strings.Contains(e.File, "..") {
-			return fmt.Errorf("ugyldig skill-filsti i katalog: %q", e.File)
+			return fmt.Errorf("ugyldig skill-filsti i bibliotek: %q", e.File)
 		}
 	}
 	return nil
 }
 
 const (
-	CatalogURL = "https://raw.githubusercontent.com/danskode/SKILLeton/main/catalog.yaml"
+	LibraryURL = "https://raw.githubusercontent.com/danskode/SKILLeton/main/library.yaml"
 	rawBase    = "https://raw.githubusercontent.com/danskode/SKILLeton/main/"
-	// CatalogSchema er den katalog-skema-version ekte forventer. Multi-repo-
+	// LibrarySchema er den bibliotek-skema-version ekte forventer. Multi-repo-
 	// kontrakten mellem ekte og SKILLeton er løs YAML; ligger SKILLeton's
 	// top-level version højere, kender denne ekte-version måske ikke alle felter.
-	CatalogSchema = 1
+	LibrarySchema = 1
 	// maxFetchBytes lofter fjern-svar, så et kompromitteret/ondsindet endpoint
-	// ikke kan udmatte hukommelsen (CWE-400). Skills/kataloger er små markdown/YAML.
+	// ikke kan udmatte hukommelsen (CWE-400). Skills/biblioteker er små markdown/YAML.
 	maxFetchBytes = 5 << 20 // 5 MB
 )
 
-type CatalogEntry struct {
+type LibraryEntry struct {
 	Name        string   `yaml:"name"`
 	Description string   `yaml:"description"`
 	Version     string   `yaml:"version"`
@@ -55,10 +55,10 @@ type CatalogEntry struct {
 	Requires []string `yaml:"requires"`
 }
 
-// RequiredFor returnerer de skills i kataloget der er obligatoriske for en
+// RequiredFor returnerer de skills i biblioteket der er obligatoriske for en
 // given funktion (fx "harness" eller "wiki").
-func (c *Catalog) RequiredFor(feature string) []CatalogEntry {
-	var out []CatalogEntry
+func (c *Library) RequiredFor(feature string) []LibraryEntry {
+	var out []LibraryEntry
 	for _, s := range c.Skills {
 		for _, r := range s.Requires {
 			if r == feature {
@@ -70,33 +70,33 @@ func (c *Catalog) RequiredFor(feature string) []CatalogEntry {
 	return out
 }
 
-type Catalog struct {
+type Library struct {
 	Version int            `yaml:"version"`
-	Skills  []CatalogEntry `yaml:"skills"`
+	Skills  []LibraryEntry `yaml:"skills"`
 }
 
-func FetchCatalog() (*Catalog, error) {
+func FetchLibrary() (*Library, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(CatalogURL)
+	resp, err := client.Get(LibraryURL)
 	if err != nil {
-		return nil, fmt.Errorf("hent katalog: %w", err)
+		return nil, fmt.Errorf("hent bibliotek: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("hent katalog: HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("hent bibliotek: HTTP %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes))
 	if err != nil {
 		return nil, err
 	}
-	var cat Catalog
-	if err := yaml.Unmarshal(data, &cat); err != nil {
-		return nil, fmt.Errorf("parse katalog: %w", err)
+	var lib Library
+	if err := yaml.Unmarshal(data, &lib); err != nil {
+		return nil, fmt.Errorf("parse bibliotek: %w", err)
 	}
-	return &cat, nil
+	return &lib, nil
 }
 
-func DownloadSkill(entry CatalogEntry, destDir string) error {
+func DownloadSkill(entry LibraryEntry, destDir string) error {
 	if err := entry.validate(); err != nil {
 		return err
 	}
@@ -120,6 +120,9 @@ func DownloadSkill(entry CatalogEntry, destDir string) error {
 	name := entry.Name + ".md"
 	if filepath.Base(name) != name {
 		return fmt.Errorf("ugyldigt skill-filnavn: %q", entry.Name)
+	}
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return err
 	}
 	return os.WriteFile(filepath.Join(destDir, name), data, 0644)
 }
@@ -149,7 +152,7 @@ func InstalledVersions(skillsDir string) map[string]string {
 
 // FetchSkillContent henter den rå markdown for en skill fra SKILLeton uden at
 // gemme den — bruges til at læse en skill igennem før installation.
-func FetchSkillContent(entry CatalogEntry) (string, error) {
+func FetchSkillContent(entry LibraryEntry) (string, error) {
 	if err := entry.validate(); err != nil {
 		return "", err
 	}
