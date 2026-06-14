@@ -1234,6 +1234,8 @@ func (a *Agent) commandAvailable(cmd string) bool {
 		return a.cfg.Provider != nil
 	case cmd == "/plan godkend" || cmd == "/plan vis" || cmd == "/plan afvis":
 		return a.planMode
+	case cmd == "/skills [navn]" || strings.HasPrefix(cmd, "/skills update"):
+		return len(a.cfg.Skills) > 0 // intet at aktivere/opdatere uden installerede skills
 	}
 	return true
 }

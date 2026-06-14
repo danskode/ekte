@@ -589,6 +589,19 @@ func (m *Model) updateSuggestions() {
 		}
 	}
 
+	// Kontekst (TUI-state, ikke synlig for agenten): skjul kø-kommandoer når køen
+	// er tom — der er intet at vise/slette/rydde.
+	if len(m.promptQueue) == 0 {
+		kept := matches[:0:0]
+		for _, c := range matches {
+			if c == "/kø" || strings.HasPrefix(c, "/kø ") {
+				continue
+			}
+			kept = append(kept, c)
+		}
+		matches = kept
+	}
+
 	m.suggestions = matches
 	if m.suggestionIdx >= len(matches) {
 		m.suggestionIdx = -1

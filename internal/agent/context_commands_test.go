@@ -3,6 +3,7 @@ package agent
 import (
 	"testing"
 
+	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/wiki"
 )
 
@@ -27,14 +28,24 @@ func TestCommandAvailable(t *testing.T) {
 	if !a.commandAvailable("/clear") {
 		t.Error("/clear bør altid være tilgængelig")
 	}
+	if a.commandAvailable("/skills [navn]") || a.commandAvailable("/skills update") {
+		t.Error("/skills [navn] og /skills update bør være skjult uden installerede skills")
+	}
+	if !a.commandAvailable("/skills library") {
+		t.Error("/skills library bør altid være tilgængelig (remote)")
+	}
 
 	// Aktivér kontekst → kommandoerne dukker op.
 	a.cfg.Wiki = &wiki.Wiki{}
 	a.planMode = true
+	a.cfg.Skills = []skill.Skill{{Name: "tdd"}}
 	if !a.commandAvailable(`/wiki "spørgsmål"`) {
 		t.Error("wiki-kommando bør vises når wiki er sat op")
 	}
 	if !a.commandAvailable("/plan godkend") {
 		t.Error("/plan godkend bør vises i plan mode")
+	}
+	if !a.commandAvailable("/skills update") {
+		t.Error("/skills update bør vises med installerede skills")
 	}
 }
