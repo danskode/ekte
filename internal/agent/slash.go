@@ -552,9 +552,13 @@ func (a *Agent) handleSkillsShow(arg string) []Event {
 	if err != nil {
 		return []Event{{Type: EventError, Content: "Kunne ikke hente skill: " + err.Error()}}
 	}
-	header := fmt.Sprintf("─── %s ─── (læser kun; ikke installeret)\n\n", entry.Name)
-	footer := "\n\n─── Installér med: /skills install " + entry.Name
-	return []Event{{Type: EventSystem, Content: header + content + footer}}
+	panel := fmt.Sprintf("─── %s ───\n(læser kun; ikke installeret)\n\n%s\n\n─── Installér: /skills install %s", entry.Name, content, entry.Name)
+	// Selve indholdet vises i sidepanelet (EventToolOutput); en kort note i
+	// samtalen kvitterer, så det ikke ser ud som om intet skete.
+	return []Event{
+		{Type: EventSystem, Content: "📖 Viser " + entry.Name + " i panelet → (installér med '/skills install " + entry.Name + "')"},
+		{Type: EventToolOutput, Content: panel},
+	}
 }
 
 func (a *Agent) handleSkillsInstall(arg string) []Event {

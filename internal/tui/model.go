@@ -616,6 +616,12 @@ func (m Model) renderSuggestions() string {
 		}
 	}
 	sb.WriteString("  " + hintStyle.Render("tab · ↑↓"))
+	// Vis beskrivelsen for det fremhævede forslag (fx at /skills show tager nr|navn).
+	if m.suggestionIdx >= 0 && m.suggestionIdx < len(m.suggestions) && m.agent != nil {
+		if desc := m.agent.DescribeCommand(m.suggestions[m.suggestionIdx]); desc != "" {
+			sb.WriteString("\n  " + dimStyle.Render(desc))
+		}
+	}
 	return sb.String()
 }
 

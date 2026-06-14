@@ -323,6 +323,23 @@ func (a *Agent) Commands() []string {
 	return cmds
 }
 
+// DescribeCommand returnerer beskrivelsen for en autocomplete-streng (fra
+// builtinCommands), eller "" hvis ukendt — bruges til at vise hint i forslags-
+// listen, fx at /skills show tager et nummer eller navn.
+func (a *Agent) DescribeCommand(cmd string) string {
+	for _, c := range builtinCommands {
+		if c[0] == cmd {
+			return c[1]
+		}
+	}
+	for _, s := range a.cfg.Skills {
+		if "/"+s.Name == cmd {
+			return s.Description
+		}
+	}
+	return ""
+}
+
 // WorkMode returnerer den aktive arbejdstilstand: "plan" eller "develop".
 // Uafhængig af verbositets-tilstanden (/mode beginner|expert) — vises i
 // TUI'ens statuslinje og skiftes med Shift+Tab (ToggleWorkMode).
