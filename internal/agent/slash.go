@@ -14,6 +14,7 @@ import (
 	"github.com/danskode/ekte/internal/dep"
 	"github.com/danskode/ekte/internal/git"
 	"github.com/danskode/ekte/internal/obs"
+	"github.com/danskode/ekte/internal/orchestrator"
 	"github.com/danskode/ekte/internal/provider"
 	"github.com/danskode/ekte/internal/review"
 	"github.com/danskode/ekte/internal/session"
@@ -53,6 +54,9 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 
 	case "/review":
 		return a.handleReview(ctx)
+
+	case "/orchestrate":
+		return a.handleOrchestrate(ctx, arg)
 
 	case "/spec":
 		return a.handleSpec(ctx, arg)
@@ -396,6 +400,41 @@ func (a *Agent) handleSkills(arg string) []Event {
 		return []Event{{Type: EventSystem, Content: "Skill ikke fundet: " + arg + "\nBrug '/skills' for at se installerede skills."}}
 	}
 	return []Event{{Type: EventSystem, Content: renderSkillsList(a.cfg.Skills)}}
+}
+
+// handleOrchestrate kører Fase 1 af multi-agent-flowet: nedbryd opgave →
+// subagenter løser + scores/itereres → saml. Subagent-output er FORSLAG;
+// hovedagenten (denne chat) har ansvar for implementering og kodebase-fit.
+// Bemærk: kører flere LLM-kald synkront (token-tungt) — resultatet vises når
+// hele flowet er færdigt (live-streaming er Fase 2).
+func (a *Agent) handleOrchestrate(ctx context.Context, arg string) []Event {
+	if strings.TrimSpace(arg) == "" {
+		return []Event{{Type: EventSystem, Content: "Brug: /orchestrate <opgave>\nNedbryder opgaven og lader subagenter løse den (flere LLM-kald)."}}
+	}
+	if a.cfg.Provider == nil {
+		return []Event{{Type: EventError, Content: "Ingen provider konfigureret."}}
+	}
+	var trace strings.Builder
+	orch := orchestrator.New(a.cfg.Provider, orchestrator.Options{}, func(msg string) {
+		trace.WriteString(msg + "\n")
+	})
+	sol, err := orch.Run(ctx, arg)
+	if err != nil {
+		return []Event{{Type: EventError, Content: "Orchestrator-fejl: " + err.Error() + "\n\n" + trace.String()}}
+	}
+	var sb strings.Builder
+	sb.WriteString(trace.String())
+	sb.WriteString("\nDelresultater:\n")
+	for i, r := range sol.SubResults {
+		status := "✓"
+		if !r.Accepted {
+			status = "✗"
+		}
+		sb.WriteString(fmt.Sprintf("  %s %d. %-24s score %d/100 (%d runder)\n", status, i+1, r.Task.Title, r.Score, r.Iterations))
+	}
+	sb.WriteString("\n─── Samlet løsning (FORSLAG — hovedagenten validerer mod kodebasen) ───\n\n")
+	sb.WriteString(sol.Assembled)
+	return []Event{{Type: EventSystem, Content: sb.String()}}
 }
 
 // handleReview kører et provider-agnostisk sikkerhedsreview af arbejdstræets
@@ -1116,6 +1155,7 @@ var builtinCommands = [][2]string{
 	{"/skills install", "installér skill(s) — fx 'install 1,3'"},
 	{"/skills update", "opdatér skill(s) til nyeste (--all)"},
 	{"/review", "agnostisk sikkerhedsreview af ændringer (valgt LLM)"},
+	{"/orchestrate <opgave>", "multi-agent: nedbryd → subagenter → saml (Fase 1)"},
 	{"/spec <navn>", "opret spec + git worktree"},
 	{"/compress", "komprimer kontekstvindue"},
 	{"/wiki \"spørgsmål\"", "søg i simple-minded (lokalt videnslager)"},
