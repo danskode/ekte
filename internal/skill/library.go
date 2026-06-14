@@ -6,11 +6,31 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// skillNameRe begrænser skill-navne til et sikkert tegnsæt. Navnet bruges til at
+// danne filstien i skillsDir, og kataloget er fjernhentet (ubetroet) — så et
+// navn med stiseparatorer eller '..' må aldrig kunne skrive uden for mappen.
+var skillNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// validate afviser katalog-entries hvis navn/fil-sti ikke er sikre at bruge til
+// filskrivning eller URL-konstruktion (CWE-22 path traversal via supply-chain).
+func (e CatalogEntry) validate() error {
+	if !skillNameRe.MatchString(e.Name) {
+		return fmt.Errorf("ugyldigt skill-navn i katalog: %q", e.Name)
+	}
+	if e.File != "" {
+		if strings.HasPrefix(e.File, "/") || strings.Contains(e.File, "..") {
+			return fmt.Errorf("ugyldig skill-filsti i katalog: %q", e.File)
+		}
+	}
+	return nil
+}
 
 const (
 	CatalogURL = "https://raw.githubusercontent.com/danskode/SKILLeton/main/catalog.yaml"
@@ -19,6 +39,9 @@ const (
 	// kontrakten mellem ekte og SKILLeton er løs YAML; ligger SKILLeton's
 	// top-level version højere, kender denne ekte-version måske ikke alle felter.
 	CatalogSchema = 1
+	// maxFetchBytes lofter fjern-svar, så et kompromitteret/ondsindet endpoint
+	// ikke kan udmatte hukommelsen (CWE-400). Skills/kataloger er små markdown/YAML.
+	maxFetchBytes = 5 << 20 // 5 MB
 )
 
 type CatalogEntry struct {
@@ -59,7 +82,10 @@ func FetchCatalog() (*Catalog, error) {
 		return nil, fmt.Errorf("hent katalog: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("hent katalog: HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +97,9 @@ func FetchCatalog() (*Catalog, error) {
 }
 
 func DownloadSkill(entry CatalogEntry, destDir string) error {
+	if err := entry.validate(); err != nil {
+		return err
+	}
 	url := rawBase + entry.File
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
@@ -78,11 +107,21 @@ func DownloadSkill(entry CatalogEntry, destDir string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("hent skill: HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes))
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(destDir, entry.Name+".md"), data, 0644)
+	// Defense-in-depth ved skrive-stedet: navnet er allerede valideret af
+	// entry.validate() ovenfor, men vi tvinger eksplicit at filnavnet er et enkelt
+	// led, så stien aldrig kan forlade destDir (CWE-22).
+	name := entry.Name + ".md"
+	if filepath.Base(name) != name {
+		return fmt.Errorf("ugyldigt skill-filnavn: %q", entry.Name)
+	}
+	return os.WriteFile(filepath.Join(destDir, name), data, 0644)
 }
 
 // InstalledNames returnerer navnene på skills der allerede ligger i skillsDir.
@@ -111,6 +150,9 @@ func InstalledVersions(skillsDir string) map[string]string {
 // FetchSkillContent henter den rå markdown for en skill fra SKILLeton uden at
 // gemme den — bruges til at læse en skill igennem før installation.
 func FetchSkillContent(entry CatalogEntry) (string, error) {
+	if err := entry.validate(); err != nil {
+		return "", err
+	}
 	url := rawBase + entry.File
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
@@ -121,7 +163,7 @@ func FetchSkillContent(entry CatalogEntry) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("hent skill: HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes))
 	if err != nil {
 		return "", err
 	}
