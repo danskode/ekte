@@ -28,17 +28,23 @@ func TestCommandAvailable(t *testing.T) {
 	if !a.commandAvailable("/clear") {
 		t.Error("/clear bør altid være tilgængelig")
 	}
+	// libraryUp er false som default (baggrunds-probe kører ikke i test) → remote
+	// skills-kommandoer er skjult; /skills [navn] kræver installerede skills.
+	if a.commandAvailable("/skills library") || a.commandAvailable("/skills install") {
+		t.Error("remote skills-kommandoer bør være skjult når biblioteket ikke kan nås")
+	}
 	if a.commandAvailable("/skills [navn]") || a.commandAvailable("/skills update") {
 		t.Error("/skills [navn] og /skills update bør være skjult uden installerede skills")
-	}
-	if !a.commandAvailable("/skills library") {
-		t.Error("/skills library bør altid være tilgængelig (remote)")
 	}
 
 	// Aktivér kontekst → kommandoerne dukker op.
 	a.cfg.Wiki = &wiki.Wiki{}
 	a.planMode = true
 	a.cfg.Skills = []skill.Skill{{Name: "tdd"}}
+	a.libraryUp.Store(true)
+	if !a.commandAvailable("/skills library") {
+		t.Error("/skills library bør vises når biblioteket kan nås")
+	}
 	if !a.commandAvailable(`/wiki "spørgsmål"`) {
 		t.Error("wiki-kommando bør vises når wiki er sat op")
 	}

@@ -469,7 +469,7 @@ func (a *Agent) handleReview(ctx context.Context) []Event {
 }
 
 func (a *Agent) handleSkillsLibrary() []Event {
-	lib, err := skill.FetchLibrary()
+	lib, err := a.fetchLibrary()
 	if err != nil {
 		return []Event{{Type: EventError, Content: "Kunne ikke hente SKILLeton-bibliotek: " + err.Error()}}
 	}
@@ -539,7 +539,7 @@ func (a *Agent) handleSkillsShow(arg string) []Event {
 	if arg == "" {
 		return []Event{{Type: EventSystem, Content: "Brug: /skills show <nr|navn>"}}
 	}
-	lib, err := skill.FetchLibrary()
+	lib, err := a.fetchLibrary()
 	if err != nil {
 		return []Event{{Type: EventError, Content: "Kunne ikke hente SKILLeton-bibliotek: " + err.Error()}}
 	}
@@ -565,7 +565,7 @@ func (a *Agent) handleSkillsInstall(arg string) []Event {
 	if arg == "" {
 		return []Event{{Type: EventSystem, Content: "Brug: /skills install <nr|navn> ...   (fx 'install 1,3' eller 'install tdd pitch-first')"}}
 	}
-	lib, err := skill.FetchLibrary()
+	lib, err := a.fetchLibrary()
 	if err != nil {
 		return []Event{{Type: EventError, Content: "Kunne ikke hente SKILLeton-bibliotek: " + err.Error()}}
 	}
@@ -607,7 +607,7 @@ func (a *Agent) installSkillEntries(entries []skill.LibraryEntry, unknown []stri
 
 // handleSkillsBundle lister pakker (uden arg) eller installerer en hel pakke.
 func (a *Agent) handleSkillsBundle(arg string) []Event {
-	lib, err := skill.FetchLibrary()
+	lib, err := a.fetchLibrary()
 	if err != nil {
 		return []Event{{Type: EventError, Content: "Kunne ikke hente SKILLeton-bibliotek: " + err.Error()}}
 	}
@@ -641,7 +641,7 @@ func (a *Agent) handleSkillsBundle(arg string) []Event {
 }
 
 func (a *Agent) handleSkillsUpdate(name string) []Event {
-	lib, err := skill.FetchLibrary()
+	lib, err := a.fetchLibrary()
 	if err != nil {
 		return []Event{{Type: EventError, Content: "Kunne ikke hente SKILLeton-bibliotek: " + err.Error()}}
 	}
@@ -1234,8 +1234,12 @@ func (a *Agent) commandAvailable(cmd string) bool {
 		return a.cfg.Provider != nil
 	case cmd == "/plan godkend" || cmd == "/plan vis" || cmd == "/plan afvis":
 		return a.planMode
-	case cmd == "/skills [navn]" || strings.HasPrefix(cmd, "/skills update"):
-		return len(a.cfg.Skills) > 0 // intet at aktivere/opdatere uden installerede skills
+	case cmd == "/skills library" || cmd == "/skills bundle" || cmd == "/skills show" || cmd == "/skills install":
+		return a.libraryUp.Load() // remote — skjul når SKILLeton ikke kan nås (cachet status)
+	case cmd == "/skills [navn]":
+		return len(a.cfg.Skills) > 0 // intet at aktivere uden installerede skills
+	case strings.HasPrefix(cmd, "/skills update"):
+		return len(a.cfg.Skills) > 0 && a.libraryUp.Load()
 	}
 	return true
 }

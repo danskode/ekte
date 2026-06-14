@@ -88,13 +88,14 @@ tool-beskrivelserne, så LLM'en kender dem.
 
 En skill er en markdown-fil med YAML-frontmatter (`name`, `description`,
 `version`, `tags`, `requires`) og en `## System Prompt Addition`-sektion. Filer
-hentes fra `.ekte/skills/` i projektmappen eller fra SKILLeton-kataloget via
-`/skills catalog` / `/skills show` / `/skills install` / `/skills update`. Aktiv
-skill injiceres som første system-besked i næste prompt, derefter nulstilles den.
+hentes fra `.ekte/skills/` i projektmappen eller fra SKILLeton-biblioteket via
+`/skills library` / `/skills show` / `/skills install` / `/skills update` /
+`/skills bundle`. Aktiv skill injiceres som første system-besked i næste prompt,
+derefter nulstilles den.
 
 Obligatoriske skills (`requires: [harness]` eller `[wiki]`) auto-installeres ved
-onboarding. Kontrakten mod SKILLeton er `catalog.yaml`; hold skema-versionen i
-sync (se `skill.CatalogSchema`).
+onboarding. Kontrakten mod SKILLeton er `library.yaml`; hold skema-versionen i
+sync (se `skill.LibrarySchema`).
 
 ### Wiki
 

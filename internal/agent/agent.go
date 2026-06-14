@@ -6,12 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/danskode/ekte/internal/ektelog"
@@ -168,6 +170,11 @@ type Agent struct {
 	// den allerede har set. Invalideres automatisk ved skriveoperationer.
 	toolCache      map[string]string
 	toolCacheBytes int
+	// libraryUp cacher om SKILLeton-biblioteket kan nås (probet i baggrunden ved
+	// opstart + opdateret ved faktiske fetches). Optimistisk default true, så
+	// remote skills-kommandoer vises indtil en probe/fetch faktisk fejler —
+	// autocomplete må aldrig lave et blokerende netværkskald pr. tastetryk.
+	libraryUp atomic.Bool
 }
 
 type obsBreakdown struct {
@@ -179,6 +186,8 @@ func New(cfg Config) *Agent {
 		cfg.Log = ektelog.Discard()
 	}
 	a := &Agent{cfg: cfg, toolCache: map[string]string{}}
+	a.libraryUp.Store(true) // optimistisk indtil baggrunds-proben siger andet
+	go a.probeLibrary()
 	if cfg.ResumeSession != nil {
 		// Gemte sessionsbeskeder — uanset rolle — kan indeholde tekst der ligner
 		// instruktioner: 'tool'-resultater kan indeholde tidligere læst filindhold,
@@ -341,6 +350,29 @@ func (a *Agent) DescribeCommand(cmd string) string {
 		}
 	}
 	return ""
+}
+
+// probeLibrary tjekker i baggrunden om SKILLeton-biblioteket kan nås og cacher
+// resultatet i libraryUp. Kaldes fra New() i en goroutine — aldrig synkront fra
+// autocomplete (det ville fryse UI'en).
+func (a *Agent) probeLibrary() {
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Get(skill.LibraryURL)
+	if err != nil {
+		a.libraryUp.Store(false)
+		return
+	}
+	resp.Body.Close()
+	a.libraryUp.Store(resp.StatusCode == http.StatusOK)
+}
+
+// fetchLibrary henter biblioteket og opdaterer den cachede reachability-status ud
+// fra om kaldet lykkedes — så commandAvailable afspejler virkeligheden efter
+// faktisk brug. Brug denne frem for skill.FetchLibrary direkte i agent-handlers.
+func (a *Agent) fetchLibrary() (*skill.Library, error) {
+	lib, err := skill.FetchLibrary()
+	a.libraryUp.Store(err == nil)
+	return lib, err
 }
 
 // WorkMode returnerer den aktive arbejdstilstand: "plan" eller "develop".

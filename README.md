@@ -238,7 +238,10 @@ Alle kommandoer skrives direkte i input-feltet.
 | `/hjælp` | Vis liste over alle kommandoer |
 | `/init` | Opret `.ekte/config.yaml` + `ekte.md` i denne mappe (aktiverer fil-tools) |
 | `/skills [navn]` | Vis tilgængelige skills — angiv navn for at aktivere |
-| `/skills catalog` | Vis SKILLeton-kataloget |
+| `/skills library` | Vis SKILLeton-biblioteket |
+| `/skills bundle <navn>` | Installér en skill-pakke (security/ci/aidd/...) |
+| `/skills show <nr\|navn>` | Læs en skill før install |
+| `/skills update <navn>` | Opdatér installeret skill (eller `--all`) |
 | `/skills install <navn>` | Installér en skill fra SKILLeton |
 | `/spec <navn>` | Opret en spec og tilhørende git worktree |
 | `/spec merge <navn>` | Merge worktree ind i main og ryd op |
@@ -443,7 +446,7 @@ ekte/
 │   │   └── session.go         # gem og indlæs samtaler som JSON
 │   ├── skill/
 │   │   ├── skill.go           # parser markdown-skills med YAML-frontmatter
-│   │   └── catalog.go         # SKILLeton-katalog: /skills catalog + install
+│   │   └── library.go         # SKILLeton-bibliotek: /skills library + install/bundle
 │   ├── tools/
 │   │   ├── tools.go           # LLM-tools: read/write/edit/search med sandkasse
 │   │   └── fetch.go           # /wiki-get URL-hentning med SSRF-værn
