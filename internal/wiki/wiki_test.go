@@ -36,7 +36,14 @@ func TestSafeJoinRejectsSymlinkEscape(t *testing.T) {
 		t.Skipf("symlink ikke understøttet: %v", err)
 	}
 	if _, err := w.safeJoin("out/evil.md"); err == nil {
-		t.Error("safeJoin burde afvise skrivning gennem symlink ud af roden")
+		t.Error("safeJoin burde afvise skrivning gennem symlink (mellemled) ud af roden")
+	}
+	// Sidste sti-komponent er selv et symlink ud af roden.
+	if err := os.Symlink(outside, filepath.Join(root, "direct")); err != nil {
+		t.Skipf("symlink ikke understøttet: %v", err)
+	}
+	if _, err := w.safeJoin("direct"); err == nil {
+		t.Error("safeJoin burde afvise symlink som sidste komponent")
 	}
 }
 

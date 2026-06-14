@@ -260,9 +260,11 @@ func (w *Wiki) safeJoin(relPath string) (string, error) {
 	if full != rootAbs && !strings.HasPrefix(full, rootAbs+sep) {
 		return "", fmt.Errorf("sti uden for wiki-roden: %s", relPath)
 	}
-	// Følg symlinks på nærmeste eksisterende forælder, så et symlink inde i
-	// wikien ikke kan pege ud af sandboxen (CWE-59).
-	for dir := filepath.Dir(full); ; {
+	// Følg symlinks fra det endelige led og op ad nærmeste eksisterende forælder,
+	// så hverken et mellemled eller selve sidste komponent kan pege ud af
+	// sandboxen (CWE-59). Starter ved full: hvis den ikke findes endnu, falder vi
+	// videre op til forælderen.
+	for dir := full; ; {
 		if real, err := filepath.EvalSymlinks(dir); err == nil {
 			if real != rootAbs && !strings.HasPrefix(real, rootAbs+sep) {
 				return "", fmt.Errorf("sti uden for wiki-roden (symlink): %s", relPath)
