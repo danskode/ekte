@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const templateRepo = "https://github.com/danskode/simple-minded.git"
@@ -254,9 +255,25 @@ func (w *Wiki) safeJoin(relPath string) (string, error) {
 	if real, err := filepath.EvalSymlinks(rootAbs); err == nil {
 		rootAbs = real
 	}
+	sep := string(os.PathSeparator)
 	full := filepath.Clean(filepath.Join(rootAbs, relPath))
-	if full != rootAbs && !strings.HasPrefix(full, rootAbs+string(os.PathSeparator)) {
+	if full != rootAbs && !strings.HasPrefix(full, rootAbs+sep) {
 		return "", fmt.Errorf("sti uden for wiki-roden: %s", relPath)
+	}
+	// Følg symlinks på nærmeste eksisterende forælder, så et symlink inde i
+	// wikien ikke kan pege ud af sandboxen (CWE-59).
+	for dir := filepath.Dir(full); ; {
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			if real != rootAbs && !strings.HasPrefix(real, rootAbs+sep) {
+				return "", fmt.Errorf("sti uden for wiki-roden (symlink): %s", relPath)
+			}
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
 	return full, nil
 }
@@ -365,6 +382,11 @@ func BuildBudgetedContext(query string, pages []Page, budgetTokens int) (string,
 			bodyText = bodyText[:avail]
 			if idx := strings.LastIndex(bodyText, "\n"); idx > avail/2 {
 				bodyText = bodyText[:idx]
+			}
+			// Byte-slicing kan dele en multibyte-rune (dansk/UTF-8) — trim den
+			// ugyldige hale, så vi ikke sender korrupt UTF-8 til modellen.
+			for len(bodyText) > 0 && !utf8.ValidString(bodyText) {
+				bodyText = bodyText[:len(bodyText)-1]
 			}
 			bodyText += "\n[afkortet — brug /wiki for fuld side]"
 			full = false

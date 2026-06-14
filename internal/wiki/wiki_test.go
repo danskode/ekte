@@ -28,6 +28,18 @@ func TestSafeJoinRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestSafeJoinRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	w := &Wiki{root: root}
+	if err := os.Symlink(outside, filepath.Join(root, "out")); err != nil {
+		t.Skipf("symlink ikke understøttet: %v", err)
+	}
+	if _, err := w.safeJoin("out/evil.md"); err == nil {
+		t.Error("safeJoin burde afvise skrivning gennem symlink ud af roden")
+	}
+}
+
 func TestSaveRawRejectsTraversal(t *testing.T) {
 	w := &Wiki{root: t.TempDir()}
 	if _, err := w.SaveRaw("../escape.md", "x"); err == nil {
