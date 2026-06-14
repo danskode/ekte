@@ -80,9 +80,20 @@ echo "→ kører tjek før push..."
 echo "✓ tjek grønne"
 ```
 
-Tilbyd at tilføje et sikkerhedsreview-trin (jf. [[security-review]]) der kører før
-push og blokerer ved medium+ fund. Hvis brugeren bruger ekte, så peg på at samme
-mønster findes i ekte's egen `scripts/pre-push.sh`.
+Tilbyd at tilføje et **agnostisk** sikkerhedsreview-trin der blokerer ved medium+
+fund. Hvis brugeren bruger ekte, så brug `ekte review` — den kører reviewet via
+den LLM brugeren allerede har valgt (også en lokal model som LM Studio/Ollama),
+så der ikke kræves nogen ekstern API-nøgle på maskinen eller i CI:
+
+```sh
+# i pre-push, efter tests:
+ekte review || { echo "✗ sikkerhedsreview fandt medium+ fund — push afbrudt" >&2; exit 1; }
+```
+
+`ekte review` exit'er 0 ved lav risiko, 1 ved medium+ fund, og 2 hvis reviewet
+ikke kan køres/fortolkes (**fail-closed** — blokerer, så et uforståeligt svar
+aldrig stilles lig grønt lys; opt-out med `--allow-failopen` for upålidelige
+lokale modeller). For andre setups: se [[security-review]].
 
 **3. CI-gate + branch protection.** Henvis til [[ci-hardening]] for en
 SHA-pinnet GitHub Actions-workflow + Dependabot. Anbefal derefter branch

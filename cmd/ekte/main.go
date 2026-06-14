@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/danskode/ekte/internal/obs"
 	"github.com/danskode/ekte/internal/onboarding"
 	"github.com/danskode/ekte/internal/provider"
+	"github.com/danskode/ekte/internal/review"
 	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/springcheck"
@@ -36,6 +38,10 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "springcheck" {
 		runSpringCheck()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "review" {
+		runReview()
 		return
 	}
 	autoApprove := false
@@ -949,4 +955,93 @@ func runInit() {
 	fmt.Println("    lint: golangci-lint run")
 	fmt.Println()
 	fmt.Println("Kør 'ekte' for at starte.")
+}
+
+// runReview kører et provider-agnostisk sikkerhedsreview af git-diffen via den
+// model brugeren har valgt (inkl. lokal LM Studio/Ollama). Bruges af 'ekte review'
+// og af safe-flow's pre-push-hook. Exit-koder: 0 = lav risiko; 1 = medium+ fund
+// (gate blokerer); 2 = kunne ikke køre/fortolke — FAIL-CLOSED (blokerer), så et
+// uforståeligt svar aldrig stilles lig grønt lys. Opt-out til fail-open:
+// --allow-failopen eller EKTE_REVIEW_ALLOW_FAILOPEN=1 (bevidst usikkert; sæt aldrig
+// i CI/branch-protection-kontekster).
+func runReview() {
+	cwd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
+	localCfg, _ := provider.LoadConfig(filepath.Join(cwd, ".ekte", "config.yaml"))
+	globalCfg, _ := provider.LoadConfig(filepath.Join(home, ".ekte", "config.yaml"))
+	cfg := provider.MergeConfigs(globalCfg, localCfg)
+	if cfg == nil {
+		fmt.Fprintln(os.Stderr, "ekte review: ingen config fundet (.ekte/config.yaml). Kør 'ekte init'.")
+		os.Exit(2)
+	}
+	globalDir := filepath.Join(home, ".ekte")
+	if consent.IsPrivateURL(cfg.BaseURL) {
+		if consent.EnvOverride() || consent.Granted(globalDir, cfg.BaseURL) {
+			cfg.AllowLocal = true
+		} else {
+			fmt.Fprintln(os.Stderr, "ekte review: lokal provider kræver samtykke. Start ekte normalt én gang og godkend, eller sæt EKTE_ALLOW_LOCAL_PROVIDER=1.")
+			os.Exit(2)
+		}
+	}
+	p, err := provider.NewFromConfig(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ekte review: kunne ikke oprette provider:", err)
+		os.Exit(2)
+	}
+
+	diff, label, derr := gitDiffForReview(cwd)
+	if derr != nil {
+		fmt.Fprintln(os.Stderr, "ekte review: kunne ikke hente git-diff:", derr)
+		os.Exit(2)
+	}
+	res, raw, err := review.Run(context.Background(), p, diff, label)
+	if err != nil {
+		// Fail-CLOSED som default (CWE-636): et uforståeligt svar er ikke grønt
+		// lys. Opt-out for upålidelige lokale modeller via flag/env — men da
+		// blokerer reviewet ikke længere, så det er bevidst usikkert.
+		allowFailopen := os.Getenv("EKTE_REVIEW_ALLOW_FAILOPEN") == "1"
+		for _, a := range os.Args {
+			if a == "--allow-failopen" {
+				allowFailopen = true
+			}
+		}
+		fmt.Fprintln(os.Stderr, "ekte review: kunne ikke fortolke modellens svar.")
+		fmt.Fprintln(os.Stderr, err)
+		if raw != "" {
+			fmt.Fprintln(os.Stderr, "rå svar:\n"+raw)
+		}
+		if allowFailopen {
+			fmt.Fprintln(os.Stderr, "(--allow-failopen/EKTE_REVIEW_ALLOW_FAILOPEN sat — lader passere; usikkert)")
+			os.Exit(0)
+		}
+		fmt.Fprintln(os.Stderr, "Gate fejl-lukket (blokerer). Sæt EKTE_REVIEW_ALLOW_FAILOPEN=1 eller --allow-failopen for at tillade.")
+		os.Exit(2)
+	}
+	fmt.Println(review.Format(res))
+	if res.Blocking() {
+		os.Exit(1)
+	}
+}
+
+// gitDiffForReview vælger upushede commits (vs upstream) hvis muligt, ellers
+// arbejdstræet mod HEAD. Returnerer fejl eksplicit, så en git-fejl ikke maskeres
+// som en tom diff ("intet at reviewe").
+func gitDiffForReview(dir string) (string, string, error) {
+	if out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "@{u}").Output(); err == nil {
+		up := strings.TrimSpace(string(out))
+		if up != "" {
+			d, err := exec.Command("git", "-C", dir, "diff", up+"..HEAD").Output()
+			if err != nil {
+				return "", "", fmt.Errorf("git diff %s..HEAD: %w", up, err)
+			}
+			if len(strings.TrimSpace(string(d))) > 0 {
+				return string(d), "upushede commits vs " + up, nil
+			}
+		}
+	}
+	d, err := exec.Command("git", "-C", dir, "diff", "HEAD").Output()
+	if err != nil {
+		return "", "", fmt.Errorf("git diff HEAD: %w", err)
+	}
+	return string(d), "arbejdstræ vs HEAD", nil
 }

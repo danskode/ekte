@@ -73,6 +73,8 @@ func (c *Library) RequiredFor(feature string) []LibraryEntry {
 type Library struct {
 	Version int            `yaml:"version"`
 	Skills  []LibraryEntry `yaml:"skills"`
+	// Bundles er kuraterede kategori-pakker: navn → liste af skill-navne.
+	Bundles map[string][]string `yaml:"bundles"`
 }
 
 func FetchLibrary() (*Library, error) {

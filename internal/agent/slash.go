@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/danskode/ekte/internal/git"
 	"github.com/danskode/ekte/internal/obs"
 	"github.com/danskode/ekte/internal/provider"
+	"github.com/danskode/ekte/internal/review"
 	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/tools"
@@ -48,6 +50,9 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 
 	case "/skills":
 		return a.handleSkills(arg)
+
+	case "/review":
+		return a.handleReview(ctx)
 
 	case "/spec":
 		return a.handleSpec(ctx, arg)
@@ -366,6 +371,9 @@ func (a *Agent) handleSkills(arg string) []Event {
 	if arg == "library" {
 		return a.handleSkillsLibrary()
 	}
+	if arg == "bundle" || strings.HasPrefix(arg, "bundle ") {
+		return a.handleSkillsBundle(strings.TrimSpace(strings.TrimPrefix(arg, "bundle")))
+	}
 	if strings.HasPrefix(arg, "install ") {
 		return a.handleSkillsInstall(strings.TrimPrefix(arg, "install "))
 	}
@@ -388,6 +396,31 @@ func (a *Agent) handleSkills(arg string) []Event {
 		return []Event{{Type: EventSystem, Content: "Skill ikke fundet: " + arg + "\nBrug '/skills' for at se installerede skills."}}
 	}
 	return []Event{{Type: EventSystem, Content: renderSkillsList(a.cfg.Skills)}}
+}
+
+// handleReview kører et provider-agnostisk sikkerhedsreview af arbejdstræets
+// ændringer via den valgte LLM (samme som 'ekte review', men inde i TUI'en).
+func (a *Agent) handleReview(ctx context.Context) []Event {
+	if a.cfg.Provider == nil {
+		return []Event{{Type: EventError, Content: "Ingen provider konfigureret."}}
+	}
+	dir := a.cfg.RepoRoot
+	if dir == "" {
+		dir = a.cfg.WorkDir
+	}
+	out, gerr := exec.Command("git", "-C", dir, "diff", "HEAD").Output()
+	if gerr != nil {
+		return []Event{{Type: EventError, Content: "Kunne ikke køre git diff: " + gerr.Error()}}
+	}
+	diff := string(out)
+	if strings.TrimSpace(diff) == "" {
+		return []Event{{Type: EventSystem, Content: "Ingen ændringer at reviewe (arbejdstræ rent)."}}
+	}
+	res, raw, err := review.Run(ctx, a.cfg.Provider, diff, "arbejdstræ vs HEAD")
+	if err != nil {
+		return []Event{{Type: EventSystem, Content: "Kunne ikke fortolke modellens review-svar (lokale modeller kan give upålidelig JSON):\n\n" + raw}}
+	}
+	return []Event{{Type: EventSystem, Content: review.Format(res)}}
 }
 
 func (a *Agent) handleSkillsLibrary() []Event {
@@ -491,7 +524,12 @@ func (a *Agent) handleSkillsInstall(arg string) []Event {
 	if len(entries) == 0 {
 		return []Event{{Type: EventSystem, Content: "Ingen gyldige skills valgt (ukendt: " + strings.Join(unknown, ", ") + ").\nBrug '/skills library' for at se listen med numre."}}
 	}
+	return a.installSkillEntries(entries, unknown)
+}
 
+// installSkillEntries downloader en liste af bibliotek-entries til .ekte/skills/
+// og rapporterer pr. skill. Delt af /skills install og /skills bundle.
+func (a *Agent) installSkillEntries(entries []skill.LibraryEntry, unknown []string) []Event {
 	skillsDir := filepath.Join(a.cfg.WorkDir, ".ekte", "skills")
 	installed := skill.InstalledNames(skillsDir)
 	var sb strings.Builder
@@ -516,6 +554,41 @@ func (a *Agent) handleSkillsInstall(arg string) []Event {
 		sb.WriteString("\nGenstart ekte for at aktivere de nye skills.")
 	}
 	return []Event{{Type: EventSystem, Content: strings.TrimRight(sb.String(), "\n")}}
+}
+
+// handleSkillsBundle lister pakker (uden arg) eller installerer en hel pakke.
+func (a *Agent) handleSkillsBundle(arg string) []Event {
+	lib, err := skill.FetchLibrary()
+	if err != nil {
+		return []Event{{Type: EventError, Content: "Kunne ikke hente SKILLeton-bibliotek: " + err.Error()}}
+	}
+	if arg == "" {
+		var sb strings.Builder
+		sb.WriteString("SKILLeton — pakker (bundles)\n\n")
+		if len(lib.Bundles) == 0 {
+			sb.WriteString("  (ingen pakker defineret)\n")
+		} else {
+			names := make([]string, 0, len(lib.Bundles))
+			for n := range lib.Bundles {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			for _, n := range names {
+				sb.WriteString(fmt.Sprintf("  %-12s %s\n", n, strings.Join(lib.Bundles[n], ", ")))
+			}
+		}
+		sb.WriteString("\nInstallér en pakke: /skills bundle <navn>")
+		return []Event{{Type: EventSystem, Content: sb.String()}}
+	}
+	names, ok := lib.Bundles[arg]
+	if !ok {
+		return []Event{{Type: EventSystem, Content: "Ukendt pakke: " + arg + "\nBrug '/skills bundle' for at se pakker."}}
+	}
+	entries, unknown := resolveSkillSelection(lib, strings.Join(names, " "))
+	if len(entries) == 0 {
+		return []Event{{Type: EventSystem, Content: "Pakken '" + arg + "' indeholder ingen gyldige skills."}}
+	}
+	return a.installSkillEntries(entries, unknown)
 }
 
 func (a *Agent) handleSkillsUpdate(name string) []Event {
@@ -1038,9 +1111,11 @@ func denyMsg(key string) string {
 var builtinCommands = [][2]string{
 	{"/skills [navn]", "vis skills — angiv navn for at aktivere"},
 	{"/skills library", "se SKILLeton-biblioteket (✓ = installeret)"},
+	{"/skills bundle", "installér en skill-pakke (security/ci/aidd/...)"},
 	{"/skills show", "læs en skill før install (nr eller navn)"},
 	{"/skills install", "installér skill(s) — fx 'install 1,3'"},
 	{"/skills update", "opdatér skill(s) til nyeste (--all)"},
+	{"/review", "agnostisk sikkerhedsreview af ændringer (valgt LLM)"},
 	{"/spec <navn>", "opret spec + git worktree"},
 	{"/compress", "komprimer kontekstvindue"},
 	{"/wiki \"spørgsmål\"", "søg i simple-minded (lokalt videnslager)"},
