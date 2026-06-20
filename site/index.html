@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="da" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ekte — et agent harness baseret på AIDD</title>
+  <meta name="description" content="ekte er et transparent agent-harness til softwareudvikling. Du kvalificerer din intention, agenten implementerer, og harnesset verificerer resultatet før noget regnes som færdigt.">
+  <meta name="theme-color" content="#0c0d10">
+  <meta property="og:title" content="ekte — et agent harness baseret på AIDD">
+  <meta property="og:description" content="Kvalificér intentionen, lad agenten implementere, lad harnesset verificere. Kør lokalt i terminalen, provider-agnostisk.">
+  <meta property="og:type" content="website">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/asciinema-player@3.8.0/dist/bundle/asciinema-player.css" integrity="sha384-VAIywtUJJ6n5TJ2byhF+zitDG0mvuNWwRS2gSv1QtEZiVw+c/T/gdOXGwyP2OeJK" crossorigin="anonymous">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // Sæt tema før render for at undgå flash (FOUC).
+    (function () {
+      try {
+        var saved = localStorage.getItem('ekte-theme');
+        var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="#top">ekte</a>
+  <nav class="topnav">
+    <a href="#install">Installation</a>
+    <a href="#flow">AIDD-flowet</a>
+    <a href="#okosystem">Økosystem</a>
+    <a href="https://github.com/danskode/ekte" rel="noopener">GitHub ↗</a>
+    <button id="theme-toggle" class="theme-toggle" aria-label="Skift lys/mørk tilstand" title="Skift tema">
+      <span class="t-dark">☾</span><span class="t-light">☀</span>
+    </button>
+  </nav>
+</header>
+
+<main id="top">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="terminal hero-term">
+      <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">ekte</span></div>
+      <pre class="logo" aria-label="ekte">
+           ██            ██
+   █████   ██    ██  ████████      █████
+  ████████ ███████       ██       ████████
+  ██       ██    ██      ██       ██
+   ██████  ██      ██    ██████    ██████
+     et agent harness baseret på AIDD</pre>
+    </div>
+    <p class="tagline">Kvalificér din <strong>intention</strong>, lad agenten implementere, og lad
+      harnesset <strong>verificere</strong> resultatet — før noget regnes som færdigt.</p>
+    <p class="sub">Kører lokalt i terminalen. Provider-agnostisk (Anthropic · OpenAI · lokal Ollama/LM&nbsp;Studio). Gennemsigtigt.</p>
+
+    <div class="cmd hero-cmd">
+      <code id="cmd-hero">curl -fsSL https://raw.githubusercontent.com/danskode/ekte/main/install.sh | sh</code>
+      <button class="copy" data-copy="cmd-hero" aria-label="Kopiér">Kopiér</button>
+    </div>
+    <p class="micro">macOS &amp; Linux · checksum-verificeret · Windows via WSL</p>
+  </section>
+
+  <!-- INSTALL -->
+  <section id="install" class="block">
+    <h2>Installation</h2>
+    <p>Tre veje — vælg den du stoler på. Bagefter er <code>ekte</code> i din PATH.</p>
+
+    <div class="install-grid">
+      <div class="install-card">
+        <h3>Hurtigst</h3>
+        <p class="muted">Henter seneste release, verificerer sha256-checksum og installerer til <code>~/.local/bin</code>.</p>
+        <div class="cmd">
+          <code id="cmd-1">curl -fsSL https://raw.githubusercontent.com/danskode/ekte/main/install.sh | sh</code>
+          <button class="copy" data-copy="cmd-1">Kopiér</button>
+        </div>
+      </div>
+
+      <div class="install-card">
+        <h3>Inspicér først</h3>
+        <p class="muted">Læs scriptet før du kører det — for et sikkerheds-harness er det den rette vane.</p>
+        <div class="cmd">
+          <code id="cmd-2">curl -fsSL https://raw.githubusercontent.com/danskode/ekte/main/install.sh -o install.sh
+less install.sh
+sh install.sh</code>
+          <button class="copy" data-copy="cmd-2">Kopiér</button>
+        </div>
+      </div>
+
+      <div class="install-card">
+        <h3>Fra kilde</h3>
+        <p class="muted">Kræver Go 1.25+. Bygger og installerer til <code>$(go env GOPATH)/bin</code>.</p>
+        <div class="cmd">
+          <code id="cmd-3">go install github.com/danskode/ekte/cmd/ekte@latest</code>
+          <button class="copy" data-copy="cmd-3">Kopiér</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="getstarted">
+      <span class="gs-label">Så er du i gang:</span>
+      <div class="cmd inline">
+        <code id="cmd-run">cd dit-projekt &amp;&amp; ekte</code>
+        <button class="copy" data-copy="cmd-run">Kopiér</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- DEMO -->
+  <section id="demo" class="block">
+    <h2>Se det i aktion</h2>
+    <p>En session: kvalificér intent med <code>/plan</code>, byg autonomt med <code>/goal</code>, og lad sensorerne verificere før din accept.</p>
+    <div class="terminal demo-term">
+      <div class="term-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="term-title">ekte — demo</span></div>
+      <div id="demo-player"></div>
+    </div>
+    <p class="micro">Afspillet optagelse — ekte kører i din terminal, ikke i browseren.</p>
+  </section>
+
+  <!-- AIDD FLOW -->
+  <section id="flow" class="block">
+    <h2>Kerneflowet: AIDD i praksis</h2>
+    <p>ekte er et <em>harness</em>, ikke bare en chat med værktøjer: en kode-løkke der omslutter
+      sprogmodellen med <em>guides</em> (føred-kontroller) og <em>sensors</em> (efter-kontroller).
+      Den røde tråd er intentionen.</p>
+
+    <div class="flow">
+      <div class="flow-step">
+        <span class="flow-tag">1 · Definition</span>
+        <h3><code>/plan</code></h3>
+        <p>Architect of Intent-mode. Kvalificér intentionen efter <strong>ICE</strong>
+          (Intent · Context · Expectations). <code>/plan godkend</code> destillerer dine
+          forventninger til testbare succeskriterier.</p>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <span class="flow-tag">2 · Generation</span>
+        <h3><code>/goal</code></h3>
+        <p>Autonom bygge-løkke. Skriv kode → kør tjek-hook (computationelt) → og når det
+          består: en <strong>inferentiel</strong> Validate-fase med en sikkerheds-sensor og en
+          skeptisk intent-sensor. Begge skal bestå.</p>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <span class="flow-tag">3 · Verification</span>
+        <h3>Din accept</h3>
+        <p>Sensorerne <em>godkender ikke</em> — de anbefaler. Du har sidste ord (human-in-the-loop).
+          Hvert udfald opsamles som en genbrugelig lektion.</p>
+      </div>
+    </div>
+
+    <p class="note">En <code>/goal</code>-kørsel er ikke færdig, fordi koden <em>kompilerer</em> — den
+      er færdig, når den både består de tekniske tjek <strong>og</strong> beviseligt opfylder dine
+      succeskriterier, og du har godkendt det. Kør sensorerne ad hoc med <code>/verify</code> og
+      <code>/review</code> (også som <code>ekte verify</code> / <code>ekte review</code> til pre-push).</p>
+  </section>
+
+  <!-- FEATURES -->
+  <section class="block">
+    <h2>Hvad du får</h2>
+    <div class="cards">
+      <div class="card"><h3>AIDD-flow</h3><p>Intent → generér → verificér mod intentionen. Disciplin frem for improvisation.</p></div>
+      <div class="card"><h3>Sensor-verifikation</h3><p>Computationel (tests/build) + inferentiel (sikkerhed + intent-conformance) i samme løkke.</p></div>
+      <div class="card"><h3>Lokalt &amp; agnostisk</h3><p>Anthropic, OpenAI eller en lokal model. Din kode og dine nøgler bliver hvor de skal.</p></div>
+      <div class="card"><h3>Sikkerhedsmodel</h3><p>Sandkasse-låste fil-tools, tillid efter oprindelse, hemmeligheds-redaktion, fail-closed gates.</p></div>
+      <div class="card"><h3>Skills</h3><p>Installér og aktivér genbrugelige guides fra SKILLeton-biblioteket.</p></div>
+      <div class="card"><h3>Wiki &amp; hukommelse</h3><p>Et privat videnslager + automatisk opsamlet erfaring fra dine <code>/goal</code>-kørsler.</p></div>
+    </div>
+  </section>
+
+  <!-- ØKOSYSTEM -->
+  <section id="okosystem" class="block">
+    <h2>Økosystemet — tre repos</h2>
+    <p>ekte er ét af tre dele. Harnesset er styringen; de to andre er rene data, som ekte forbruger.</p>
+
+    <div class="eco-grid">
+      <article class="eco-card">
+        <pre class="eco-art" aria-label="ekte">   █████   ██   ██  ████   █████
+  ██       █████      ██    ██
+  ██       ██  ██     ██    █████
+   █████   ██   ██  ██████  █████</pre>
+        <h3>ekte</h3>
+        <p class="eco-role">Harnesset (Go TUI)</p>
+        <p>Det du installerer og kører. Al logik lever her — slash-kommandoer, sensor-loop, hooks, hukommelse.</p>
+        <p class="eco-how"><strong>Indgår sådan:</strong> det er selve værktøjet.</p>
+        <a class="eco-link" href="https://github.com/danskode/ekte" rel="noopener">danskode/ekte ↗</a>
+      </article>
+
+      <article class="eco-card">
+        <pre class="eco-art" aria-label="SKILLeton">███████  ██  ██  ██████  ██     ██              █
+██       ██ ██     ██    ██     ██       ███  ████  ██  ███
+███████  ████      ██    ██     ██       █▘    █    █ █  █ █
+     ██  ██ ██     ██    ██     ██       ██    █    █ █  █ █
+███████  ██  ██  ██████  █████  █████     ██   ██   ██   █ █</pre>
+        <h3>SKILLeton</h3>
+        <p class="eco-role">Åbent skill-bibliotek</p>
+        <p>Skills er markdown + YAML — <em>kræver ikke AI</em> at vedligeholde. Det er ekte (med din valgte model) der forbruger dem.</p>
+        <p class="eco-how"><strong>Indgår sådan:</strong> ekte henter biblioteket ved runtime. <code>/skills library</code> → install til <code>.ekte/skills/</code> (permanent) → aktivér pr. prompt med <code>/skills &lt;navn&gt;</code>.</p>
+        <a class="eco-link" href="https://github.com/danskode/SKILLeton" rel="noopener">danskode/SKILLeton ↗</a>
+      </article>
+
+      <article class="eco-card">
+        <pre class="eco-art" aria-label="simple-minded">  ┌─ simple ─────────┐
+  │  minded · wiki    │
+  └──── template ─────┘</pre>
+        <h3>simple-minded</h3>
+        <p class="eco-role">Wiki-template (videnslager)</p>
+        <p>Et agnostisk template til en LLM-vedligeholdt wiki. Du kuraterer kilderne; agenten gør bogføringen. Wikien er artefaktet — chatten er forgængelig.</p>
+        <p class="eco-how"><strong>Indgår sådan:</strong> klones af ekte via <code>ekte init</code> → vælg "wiki". Valgfrit AIDD-indhold på <code>aidd</code>-branchen; driftes via <code>wiki-maintainer</code>-skill'en.</p>
+        <a class="eco-link" href="https://github.com/danskode/simple-minded" rel="noopener">danskode/simple-minded ↗</a>
+      </article>
+    </div>
+  </section>
+
+  <!-- WHY ASKS -->
+  <section class="block why">
+    <h2>Hvorfor spørger ekte om noget ved start?</h2>
+    <p>Første gang du kører <code>ekte</code> i en mappe, guides du gennem en kort onboarding. Hvert
+      spørgsmål har en grund — ekte gætter ikke på dine vegne, og intet sker bag din ryg.</p>
+    <ul class="why-list">
+      <li><strong>Tillid til mappen</strong> — fil-tools er sandkasse-låst til projektet. Du bekræfter at du stoler på koden her, før agenten må læse/skrive.</li>
+      <li><strong>Projektbeskrivelse → <code>ekte.md</code></strong> — så agenten har kontekst på tværs af sessioner uden at genlæse alt hver gang.</li>
+      <li><strong>Dit navn + agentens navn</strong> — ren bekvemmelighed i samtalen.</li>
+      <li><strong>Provider &amp; model</strong> — hvilken LLM skal drive ekte. Skrives til <code>.ekte/config.yaml</code>; <strong>API-nøgler gemmes aldrig i filer</strong>, kun i miljøvariabler.</li>
+      <li><strong>Valgfri wiki</strong> — vil du have et delt videnslager, klones simple-minded.</li>
+      <li><strong>Samtykke ved lokal provider</strong> — peger din <code>base_url</code> på en privat adresse, spørger ekte og gemmer "ja" pr. præcis URL i <code>~/.ekte/consent.yaml</code>. En klonet config kan aldrig give sig selv lov.</li>
+      <li><strong>Hook-tillid efter oprindelse</strong> — en hook fra et klonet repo kan ikke køre vilkårlige kommandoer uden din bekræftelse. Tillid følger <em>hvor</em> kommandoen kommer fra, ikke hvad den hedder.</li>
+    </ul>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="foot-links">
+    <a href="https://github.com/danskode/ekte" rel="noopener">ekte</a>
+    <a href="https://github.com/danskode/SKILLeton" rel="noopener">SKILLeton</a>
+    <a href="https://github.com/danskode/simple-minded" rel="noopener">simple-minded</a>
+    <a href="https://github.com/danskode/ekte/blob/main/README.md" rel="noopener">Dokumentation</a>
+  </div>
+  <p class="foot-note">ekte — et agent harness baseret på AIDD (Architecture of Intent-Driven Development).</p>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/asciinema-player@3.8.0/dist/bundle/asciinema-player.min.js" integrity="sha384-svQ3ol2I6XJvPsGztCmG9/XctZ37XNsP86aAFDcKciKlaGHNbEmhhedZ7tNu5b9h" crossorigin="anonymous"></script>
+<script src="app.js"></script>
+</body>
+</html>

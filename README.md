@@ -9,6 +9,8 @@
      et agent harness baseret på AIDD
 ```
 
+🌐 **[danskode.github.io/ekte](https://danskode.github.io/ekte/)** — install-kommando, demo og økosystem.
+
 **ekte** er et transparent agent-harness til softwareudvikling, bygget som et Go
 TUI-program. Det kører direkte i terminalen — ingen browser, intet cloud-dashboard —
 og er bygget op om **AIDD** (*Architecture of Intent-Driven Development*): du
