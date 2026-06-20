@@ -244,9 +244,14 @@ func New(cfg Config) *Agent {
 	if !cfg.Whitelist.FileRead && !cfg.Whitelist.FileWrite {
 		a.baseline = append(a.baseline, provider.Message{
 			Role: "system",
-			Content: "Du har INGEN fil-tools i denne session (whitelist i .ekte/config.yaml tillader ikke fil-adgang). " +
-				"Du kan IKKE læse, skrive eller oprette filer/mapper. Påstå aldrig at du har gjort det — " +
-				"henvis i stedet brugeren til at aktivere whitelist.file_read/file_write i .ekte/config.yaml.",
+			Content: "Fil-adgang er slået fra i denne session — du har INGEN fil-tools og kan IKKE læse, " +
+				"skrive eller oprette filer/mapper. Påstå aldrig at du har gjort det. Forklar i stedet " +
+				"brugeren tydeligt og ikke-teknisk hvordan de slår det til:\n" +
+				"  1) Kør /init (opretter/retter .ekte/config.yaml og aktiverer fil-tools), ELLER\n" +
+				"  2) Tilføj i .ekte/config.yaml i projektmappen:\n" +
+				"       whitelist:\n         file_read: true\n         file_write: true\n" +
+				"     og genstart ekte.\n" +
+				"  Læs mere: https://github.com/danskode/ekte#konfiguration",
 		})
 	}
 	if cfg.Whitelist.HarnessWrite {

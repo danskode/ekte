@@ -16,13 +16,18 @@ type Result struct {
 	Ok          bool
 }
 
-// ANSI-styling så onboarding matcher ekte's terminal-æstetik (grøn accent).
+// ANSI-styling så onboarding matcher ekte's terminal-æstetik (lilla accent som TUI'en).
 const (
-	aReset = "\033[0m"
-	aGreen = "\033[32m"
-	aBold  = "\033[1m"
-	aDim   = "\033[2m"
+	aReset  = "\033[0m"
+	aBold   = "\033[1m"
+	aDim    = "\033[2m"
+	aAccent = "\033[38;5;141m" // lilla accent
 )
+
+// logoRamp er en mørk-lilla→lys-pink gradient (256-farver) der matcher TUI'ens ShowBanner.
+var logoRamp = []string{
+	"\033[38;5;54m", "\033[38;5;97m", "\033[38;5;135m", "\033[38;5;177m", "\033[38;5;219m",
+}
 
 const ekteLogo = `
            ██            ██
@@ -32,9 +37,24 @@ const ekteLogo = `
    ██████  ██      ██    ██████    ██████
 `
 
+// gradientLogo rendrer ekte-logoet med en lilla→pink gradient (én farve pr. linje).
+func gradientLogo() string {
+	lines := strings.Split(strings.Trim(ekteLogo, "\n"), "\n")
+	var sb strings.Builder
+	sb.WriteString("\n")
+	for i, ln := range lines {
+		c := logoRamp[len(logoRamp)-1]
+		if i < len(logoRamp) {
+			c = logoRamp[i]
+		}
+		sb.WriteString(c + ln + aReset + "\n")
+	}
+	return sb.String()
+}
+
 // welcomeBanner returnerer logo + velkomst + en kort forklaring af de to faser.
 func welcomeBanner() string {
-	return aGreen + ekteLogo + aReset + "\n" +
+	return gradientLogo() + "\n" +
 		"  " + aBold + "Velkommen til ekte" + aReset + " — et agent harness baseret på AIDD.\n\n" +
 		"  Kom godt i gang: vi sætter dig op i to dele —\n" +
 		"  først " + aBold + "systemet" + aReset + " (det generelle), derefter " + aBold + "dit projekt" + aReset + ".\n"
@@ -42,7 +62,7 @@ func welcomeBanner() string {
 
 // phase printer en fase-overskrift (Del 1 / Del 2).
 func phase(title string) {
-	fmt.Printf("\n%s%s═══  %s  ═══%s\n\n", aBold, aGreen, title, aReset)
+	fmt.Printf("\n%s%s═══  %s  ═══%s\n\n", aBold, aAccent, title, aReset)
 }
 
 // step printer et nummereret trin inden for en fase.
@@ -69,7 +89,7 @@ func Run(dir string) (Result, error) {
 		fmt.Println("\nAfslutter — kør ekte igen i en mappe du stoler på.")
 		return Result{Ok: false}, nil
 	}
-	fmt.Println(aGreen + "✓ Godt — så går vi i gang." + aReset)
+	fmt.Println(aAccent + "✓ Godt — så går vi i gang." + aReset)
 
 	// 2. Initialiser mappestruktur
 	for _, d := range []string{
@@ -95,15 +115,30 @@ func Run(dir string) (Result, error) {
 	// ═══ Del 1 · Systemet (det generelle) ═══
 	phase("Del 1 · Systemet — det generelle")
 
-	step(1, 3, "Sprogmodel")
+	step(1, 4, "Sprogmodel")
+	fmt.Println(aDim + "  Motoren bag ekte — den LLM der driver agenten (cloud eller lokal model)." + aReset)
 	if err := runLLMSetup(r, configPath); err != nil {
 		return Result{}, err
 	}
 
 	fmt.Println()
-	step(2, 3, "Videnslager — simple-minded (valgfrit)")
-	fmt.Println(aDim + "  Samler din viden på tværs af projekter. Tilgås manuelt med /wiki — aldrig auto-injiceret." + aReset)
+	step(2, 4, "Fil-adgang")
+	fmt.Println(aDim + "  Lader agenten faktisk læse og redigere kode i projektet — ellers kan ekte kun snakke." + aReset)
+	fmt.Println(aDim + "  Du har allerede bekræftet at du stoler på mappen." + aReset)
+	fileAccess := ask(r, "Må ekte læse og skrive filer i dette projekt? (anbefalet)")
+	if err := appendWhitelist(configPath, fileAccess); err != nil {
+		fmt.Printf("  ⚠ Kunne ikke gemme fil-adgang i config: %v\n", err)
+	} else if fileAccess {
+		fmt.Println(aAccent + "  ✓ Fil-adgang slået til." + aReset)
+	} else {
+		fmt.Println(aDim + "  Slået fra — ekte viser ved opstart hvordan du slår det til senere." + aReset)
+	}
+
 	skillsDir := filepath.Join(dir, ".ekte", "skills")
+
+	fmt.Println()
+	step(3, 4, "Videnslager — simple-minded (valgfrit)")
+	fmt.Println(aDim + "  Et delt videnslager på tværs af projekter. Tilgås manuelt med /wiki — aldrig auto-injiceret." + aReset)
 	if ask(r, "Vil du sætte en wiki op?") {
 		wikiPath := runWikiSetup(r, dir)
 		if wikiPath != "" {
@@ -117,10 +152,11 @@ func Run(dir string) (Result, error) {
 	}
 
 	fmt.Println()
-	step(3, 3, "Skills — SKILLeton")
+	step(4, 4, "Skills — SKILLeton")
+	fmt.Println(aDim + "  Genbrugelige guides der former hvordan agenten arbejder." + aReset)
 	fmt.Println(aDim + "  AIDD-skills er obligatoriske (præmissen for ekte) og installeres nu:" + aReset)
 	installRequired(skillsDir, "harness")
-	fmt.Println(aDim + "  Øvrige skills er valgfrie. Installeres permanent i .ekte/skills/; aktivér pr. prompt med /skills <navn>." + aReset)
+	fmt.Println(aDim + "  Øvrige er valgfrie. Permanent i .ekte/skills/; aktivér pr. prompt med /skills <navn>." + aReset)
 	if ask(r, "Vil du vælge flere skills fra SKILLeton?") {
 		runSkillLibrary(r, skillsDir)
 	} else {
@@ -147,7 +183,7 @@ func Run(dir string) (Result, error) {
 	}
 
 	fmt.Println()
-	fmt.Println(aBold + aGreen + "✓ Alt klar — velkommen ombord!" + aReset)
+	fmt.Println(aBold + aAccent + "✓ Alt klar — velkommen ombord!" + aReset)
 	fmt.Println()
 	fmt.Print("Tryk Enter for at starte ekte...")
 	readLine(r)
@@ -202,6 +238,8 @@ func EnsureGitignore(dir string) error {
 
 func runPRDGuide(r *bufio.Reader, path string) (string, error) {
 	fmt.Println()
+	fmt.Println(aDim + "  Vi fanger din intention med projektet (AIDD), så ekte forstår hvad du vil opnå —" + aReset)
+	fmt.Println(aDim + "  ikke en fuld spec, men nok til at agenten ikke gætter forkert." + aReset)
 	fmt.Println("Jeg stiller dig seks korte spørgsmål.")
 	fmt.Println()
 
@@ -220,7 +258,7 @@ func runPRDGuide(r *bufio.Reader, path string) (string, error) {
 	users := prompt(r, "5. Hvem er brugerne?")
 	fmt.Printf("   ✓ %s\n\n", users)
 
-	features := prompt(r, "6. Hvad er de tre vigtigste features i v1? (adskil med komma)")
+	features := prompt(r, "6. Hvad er de vigtigste outcomes/succeskriterier for v1? (hvornår er det lykkedes — adskil med komma)")
 	fmt.Printf("   ✓ Noteret\n\n")
 
 	content := fmt.Sprintf(`---
@@ -243,15 +281,17 @@ Målgruppe: %s
 
 %s
 
-## V1 features
+## V1 — outcomes / succeskriterier
 
 %s
 
-## Konventioner
+## Konventioner (AIDD)
 
-- Spec-drevet workflow: skriv spec i specs/ inden implementation
-- Brug /spec <navn> for at oprette en ny feature-branch
-- Kode skal være lean og sikker — ingen unødvendige dependencies
+- Kvalificér intent med /plan (ICE) før kode skrives
+- Byg autonomt med /goal mod opstillede succeskriterier
+- Verificér med /verify (sikkerhed + intent) før commit
+- /spec <navn> til en afgrænset feature-branch når en opgave fortjener det
+- Lean og sikker kode — ingen unødvendige dependencies
 `,
 		name, projectType, stack, todayISO(),
 		name, problem, users,
@@ -487,6 +527,23 @@ func appendWikiConfig(configPath, wikiPath string) {
 	data, _ := os.ReadFile(configPath)
 	content := string(data) + fmt.Sprintf("\nwiki:\n  enabled: true\n  path: %q\n", wikiPath)
 	_ = os.WriteFile(configPath, []byte(content), 0600)
+}
+
+// appendWhitelist skriver fil-adgangs-whitelisten ud fra brugerens valg i fil-adgang-trinnet.
+// KUN file_read/file_write — hook_run (kommando-kørsel via /hook) sættes bevidst IKKE her, da
+// brugeren kun samtykker til fil-læsning/-skrivning; hooks aktiveres separat når de tilføjes med
+// /hook. Returnerer fejl, så onboardingens viste status matcher den faktisk persisterede config.
+func appendWhitelist(configPath string, enabled bool) error {
+	val := "false"
+	if enabled {
+		val = "true"
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+	content := string(data) + fmt.Sprintf("\nwhitelist:\n  file_read: %s\n  file_write: %s\n", val, val)
+	return os.WriteFile(configPath, []byte(content), 0600)
 }
 
 func ReadProjectName(ekteMdPath string) string {

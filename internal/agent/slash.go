@@ -1200,8 +1200,10 @@ func (a *Agent) handleCompress(ctx context.Context) []Event {
 func denyMsg(key string) string {
 	return fmt.Sprintf(
 		"⛔ Operation ikke tilladt: %s\n\n"+
-			"Tilføj dette til .ekte/config.yaml for at tillade:\n\n"+
-			"  whitelist:\n    %s: true",
+			"Slå det til i din projekt-config — filen .ekte/config.yaml i projektmappen:\n\n"+
+			"  whitelist:\n    %s: true\n\n"+
+			"(eller kør /init for at oprette/rette config'en). Genstart ekte bagefter.\n"+
+			"Læs mere: https://github.com/danskode/ekte#konfiguration",
 		key, key,
 	)
 }
