@@ -9,8 +9,8 @@
   --text: #e6e8ec;
   --muted: #9aa0ab;
   --border: #262a33;
-  --accent: #5af78e;
-  --accent-ink: #04130a;
+  --accent: #c79bff;
+  --accent-ink: #1a0b2e;
   --shadow: 0 10px 30px rgba(0, 0, 0, .45);
   --dot-r: #ff5f56; --dot-y: #ffbd2e; --dot-g: #27c93f;
 }
@@ -23,7 +23,7 @@
   --text: #1a1d23;
   --muted: #5a616b;
   --border: #e1e5ea;
-  --accent: #12914c;
+  --accent: #7c3aed;
   --accent-ink: #ffffff;
   --shadow: 0 8px 24px rgba(20, 30, 50, .10);
   --dot-r: #ff5f56; --dot-y: #ffbd2e; --dot-g: #27c93f;
@@ -94,6 +94,16 @@ main { max-width: 1080px; margin: 0 auto; padding: 0 clamp(1rem, 4vw, 2rem); }
 .hero-term { max-width: 640px; margin: 0 auto 1.6rem; }
 .logo { color: var(--accent); margin: 0; padding: 1.2rem; font-size: clamp(.5rem, 1.7vw, .8rem);
   line-height: 1.2; overflow-x: auto; text-align: left; }
+/* Lilla→pink gradient på hero-logoet (matcher TUI/onboarding); fallback = solid accent. */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .logo {
+    background: linear-gradient(160deg, #7c3aed 0%, #b06cff 45%, #f0abfc 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+}
 .tagline { font-size: clamp(1.1rem, 2.6vw, 1.5rem); max-width: 38ch; margin: 0 auto .6rem; }
 .tagline strong { color: var(--accent); }
 .sub { color: var(--muted); max-width: 60ch; margin: 0 auto 1.6rem; }
