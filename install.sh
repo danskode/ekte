@@ -7,7 +7,7 @@ REPO="danskode/ekte"
 # som root / i en container): den er allerede i PATH, så 'ekte' virker straks —
 # uden at redigere PATH eller genindlæse shell. Ellers ~/.local/bin (ingen sudo),
 # som så håndteres med PATH-tilføjelse nedenfor.
-if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+if [ "$(id -u 2>/dev/null)" = "0" ] && [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
   BIN_DIR="/usr/local/bin"
 else
   BIN_DIR="${HOME}/.local/bin"
@@ -90,7 +90,7 @@ else
 fi
 
 # Installér
-echo "Installerer..."
+echo "Installerer til ${BIN_DIR}..."
 tar -xzf "${ARCHIVE}"
 mkdir -p "${BIN_DIR}"
 mv ekte "${BIN_DIR}/ekte"
@@ -103,7 +103,9 @@ echo ""
 # Tjek om BIN_DIR er i PATH
 case ":${PATH}:" in
   *":${BIN_DIR}:"*)
-    echo "Klar til brug:"
+    echo "✓ Så er ekte installeret og klar."
+    echo ""
+    echo "Kom i gang:"
     echo ""
     echo "  cd dit-projekt"
     echo "  ekte"
@@ -131,10 +133,18 @@ case ":${PATH}:" in
       echo "  echo '${LINE}' >> ~/.bashrc"
     fi
     echo ""
-    echo "Brug ekte i DENNE terminal nu:"
+    echo "✓ Så er ekte installeret — der mangler kun ÉT lille skridt:"
     echo ""
+    echo "  Genindlæs din shell:   source ${RC}"
+    echo "  (eller åbn en ny terminal)"
+    echo ""
+    echo "Derefter er du klar:"
+    echo ""
+    echo "  cd dit-projekt"
+    echo "  ekte"
+    echo ""
+    echo "Travlt? Brug ekte i DENNE terminal med det samme:"
     echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
-    echo "  cd dit-projekt && ekte"
     echo ""
     echo "(I nye terminaler virker 'ekte' automatisk.)"
     ;;
