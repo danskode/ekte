@@ -60,14 +60,16 @@ func Append(dir string, r Record) error {
 	if r.Time.IsZero() {
 		r.Time = time.Now()
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	// 0700/0600: journalen rummer mål, kriterier og sensor-kritik (telemetri) —
+	// ikke verdens-læsbar (CWE-732). Matcher appendGoalLesson.
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 	line, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, fileName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(filepath.Join(dir, fileName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
