@@ -72,7 +72,11 @@ curl -fsSL https://raw.githubusercontent.com/danskode/ekte/main/install.sh | sh
 ```
 
 Installerer til `~/.local/bin` — ingen sudo, ingen pakkemanager. Kræver `git` og
-`curl`/`wget`.
+`curl`/`wget`. Scriptet tilføjer `~/.local/bin` til din PATH (`.bashrc`/`.zshrc` + `.profile`).
+
+> **Efter install:** åbn en **ny terminal** (eller `source ~/.bashrc`) så `ekte` er i din PATH.
+> Vil du bruge den med det samme i den nuværende shell:
+> `export PATH="$HOME/.local/bin:$PATH"`.
 
 **Fra kildekode** (kræver Go 1.25+):
 
