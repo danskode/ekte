@@ -2,7 +2,16 @@
 set -e
 
 REPO="danskode/ekte"
-BIN_DIR="${HOME}/.local/bin"
+
+# Vælg installationsmappe. Foretræk /usr/local/bin når den er skrivbar (typisk
+# som root / i en container): den er allerede i PATH, så 'ekte' virker straks —
+# uden at redigere PATH eller genindlæse shell. Ellers ~/.local/bin (ingen sudo),
+# som så håndteres med PATH-tilføjelse nedenfor.
+if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+  BIN_DIR="/usr/local/bin"
+else
+  BIN_DIR="${HOME}/.local/bin"
+fi
 
 # Detektér OS
 OS="$(uname -s)"
