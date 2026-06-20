@@ -16,6 +16,40 @@ type Result struct {
 	Ok          bool
 }
 
+// ANSI-styling så onboarding matcher ekte's terminal-æstetik (grøn accent).
+const (
+	aReset = "\033[0m"
+	aGreen = "\033[32m"
+	aBold  = "\033[1m"
+	aDim   = "\033[2m"
+)
+
+const ekteLogo = `
+           ██            ██
+   █████   ██    ██  ████████      █████
+  ████████ ███████       ██       ████████
+  ██       ██    ██      ██       ██
+   ██████  ██      ██    ██████    ██████
+`
+
+// welcomeBanner returnerer logo + velkomst + en kort forklaring af de to faser.
+func welcomeBanner() string {
+	return aGreen + ekteLogo + aReset + "\n" +
+		"  " + aBold + "Velkommen til ekte" + aReset + " — et agent harness baseret på AIDD.\n\n" +
+		"  Kom godt i gang: vi sætter dig op i to dele —\n" +
+		"  først " + aBold + "systemet" + aReset + " (det generelle), derefter " + aBold + "dit projekt" + aReset + ".\n"
+}
+
+// phase printer en fase-overskrift (Del 1 / Del 2).
+func phase(title string) {
+	fmt.Printf("\n%s%s═══  %s  ═══%s\n\n", aBold, aGreen, title, aReset)
+}
+
+// step printer et nummereret trin inden for en fase.
+func step(n, total int, title string) {
+	fmt.Printf("%s[%d/%d]%s %s%s%s\n", aDim, n, total, aReset, aBold, title, aReset)
+}
+
 // IsFirstRun returnerer true hvis global config (~/.ekte/config.yaml) ikke eksisterer endnu.
 func IsFirstRun(dir string) bool {
 	home, _ := os.UserHomeDir()
@@ -27,17 +61,15 @@ func IsFirstRun(dir string) bool {
 func Run(dir string) (Result, error) {
 	r := bufio.NewReader(os.Stdin)
 
-	fmt.Println()
-	fmt.Println("Velkommen til ekte")
-	fmt.Println("──────────────────")
+	fmt.Print(welcomeBanner())
 
-	// 1. Trust-check
+	// Trust-check — porten til alt andet (fil-værktøjer arbejder kun her).
 	fmt.Println()
 	if !ask(r, "Stoler du på koden i denne mappe?") {
 		fmt.Println("\nAfslutter — kør ekte igen i en mappe du stoler på.")
 		return Result{Ok: false}, nil
 	}
-	fmt.Println("✓ Godt.")
+	fmt.Println(aGreen + "✓ Godt — så går vi i gang." + aReset)
 
 	// 2. Initialiser mappestruktur
 	for _, d := range []string{
@@ -58,40 +90,19 @@ func Run(dir string) (Result, error) {
 		fmt.Printf("⚠ Kunne ikke opdatere .gitignore: %v\n", err)
 	}
 
-	// 3. ekte.md
-	var projectName string
-	ekteMdPath := filepath.Join(dir, "ekte.md")
-	if _, err := os.Stat(ekteMdPath); os.IsNotExist(err) {
-		fmt.Println()
-		fmt.Println("Der er ingen ekte.md endnu.")
-		fmt.Println("Det er din projektkontekst — loades automatisk som baggrundsviden i hver session.")
-		fmt.Println()
-		if ask(r, "Vil du oprette den nu?") {
-			var err error
-			projectName, err = runPRDGuide(r, ekteMdPath)
-			if err != nil {
-				return Result{}, err
-			}
-		}
-	} else {
-		projectName = readProjectName(ekteMdPath)
-	}
-
-	// 4. LLM-opsætning
-	fmt.Println()
-	fmt.Println("LLM-opsætning")
-	fmt.Println("─────────────")
 	configPath := filepath.Join(dir, ".ekte", "config.yaml")
+
+	// ═══ Del 1 · Systemet (det generelle) ═══
+	phase("Del 1 · Systemet — det generelle")
+
+	step(1, 3, "Sprogmodel")
 	if err := runLLMSetup(r, configPath); err != nil {
 		return Result{}, err
 	}
 
-	// 5. Wiki
 	fmt.Println()
-	fmt.Println("simple-minded — lokalt videnslager")
-	fmt.Println("──────────────────────────────────")
-	fmt.Println("simple-minded samler din viden på tværs af projekter.")
-	fmt.Println("Tilgå den manuelt med /wiki — aldrig automatisk injiceret.")
+	step(2, 3, "Videnslager — simple-minded (valgfrit)")
+	fmt.Println(aDim + "  Samler din viden på tværs af projekter. Tilgås manuelt med /wiki — aldrig auto-injiceret." + aReset)
 	skillsDir := filepath.Join(dir, ".ekte", "skills")
 	if ask(r, "Vil du sætte en wiki op?") {
 		wikiPath := runWikiSetup(r, dir)
@@ -105,27 +116,38 @@ func Run(dir string) (Result, error) {
 		fmt.Println("  Du kan altid sætte det op senere med 'ekte init'.")
 	}
 
-	// 6. AIDD-skills — obligatoriske, da AIDD er præmissen for ekte.
 	fmt.Println()
-	fmt.Println("AIDD-skills (obligatoriske — præmissen for ekte)")
-	fmt.Println("────────────────────────────────────────────────")
+	step(3, 3, "Skills — SKILLeton")
+	fmt.Println(aDim + "  AIDD-skills er obligatoriske (præmissen for ekte) og installeres nu:" + aReset)
 	installRequired(skillsDir, "harness")
-
-	// 7. SKILLeton — øvrige, valgfrie skills
-	fmt.Println()
-	fmt.Println("Skills — SKILLeton")
-	fmt.Println("──────────────────")
-	fmt.Println("SKILLeton er et åbent bibliotek af skills til ekte.")
-	fmt.Println("Valgte skills installeres permanent i .ekte/skills/ og kan bruges fremover.")
-	fmt.Println("(Aktivér en installeret skill pr. prompt med /skills <navn> — den nulstilles bagefter.)")
+	fmt.Println(aDim + "  Øvrige skills er valgfrie. Installeres permanent i .ekte/skills/; aktivér pr. prompt med /skills <navn>." + aReset)
 	if ask(r, "Vil du vælge flere skills fra SKILLeton?") {
 		runSkillLibrary(r, skillsDir)
 	} else {
 		fmt.Println("  Du kan tilføje skills senere med '/skills library' i ekte.")
 	}
 
+	// ═══ Del 2 · Dit projekt ═══
+	phase("Del 2 · Dit projekt")
+
+	var projectName string
+	ekteMdPath := filepath.Join(dir, "ekte.md")
+	if _, err := os.Stat(ekteMdPath); os.IsNotExist(err) {
+		fmt.Println("Projektkontekst (ekte.md) loades automatisk som baggrundsviden i hver session.")
+		fmt.Println()
+		if ask(r, "Vil du oprette den nu?") {
+			var err error
+			projectName, err = runPRDGuide(r, ekteMdPath)
+			if err != nil {
+				return Result{}, err
+			}
+		}
+	} else {
+		projectName = readProjectName(ekteMdPath)
+	}
+
 	fmt.Println()
-	fmt.Println("✓ Alt klar!")
+	fmt.Println(aBold + aGreen + "✓ Alt klar — velkommen ombord!" + aReset)
 	fmt.Println()
 	fmt.Print("Tryk Enter for at starte ekte...")
 	readLine(r)
