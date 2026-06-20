@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/danskode/ekte/compare/v0.2.0...v0.2.1) (2026-06-20)
+
+
+### Bug Fixes
+
+* install.sh tilføjer ~/.local/bin til PATH automatisk ([64b0044](https://github.com/danskode/ekte/commit/64b00440a2925947078b9e59f32c7de315c24ed1))
+
 ## [0.2.0](https://github.com/danskode/ekte/compare/v0.1.0...v0.2.0) (2026-06-20)
 
 
