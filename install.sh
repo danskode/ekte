@@ -100,15 +100,34 @@ case ":${PATH}:" in
     echo "  ekte"
     ;;
   *)
-    echo "${BIN_DIR} er ikke i din PATH. Tilføj det én gang:"
+    # ~/.local/bin er ikke i PATH. Tilføj det til brugerens shell-rc, så 'ekte'
+    # virker i nye shells — idempotent (kun hvis linjen ikke allerede findes).
+    LINE='export PATH="$HOME/.local/bin:$PATH"'
+    case "${SHELL:-}" in
+      *zsh) RC="${HOME}/.zshrc" ;;
+      *)    RC="${HOME}/.bashrc" ;;
+    esac
+    UPDATED=""
+    for f in "${RC}" "${HOME}/.profile"; do
+      if [ -f "${f}" ] && grep -qF "${LINE}" "${f}" 2>/dev/null; then
+        continue   # allerede tilføjet
+      fi
+      printf '\n# ekte\n%s\n' "${LINE}" >> "${f}" 2>/dev/null && UPDATED="${UPDATED} ${f}"
+    done
+
+    if [ -n "${UPDATED}" ]; then
+      echo "✓ Tilføjede ~/.local/bin til din PATH i:${UPDATED}"
+    else
+      echo "${BIN_DIR} er ikke i din PATH. Tilføj manuelt:"
+      echo "  echo '${LINE}' >> ~/.bashrc"
+    fi
     echo ""
-    echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc"
-    echo "  source ~/.bashrc  # eller åbn en ny terminal"
+    echo "Brug ekte i DENNE terminal nu:"
     echo ""
-    echo "Derefter:"
+    echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+    echo "  cd dit-projekt && ekte"
     echo ""
-    echo "  cd dit-projekt"
-    echo "  ekte"
+    echo "(I nye terminaler virker 'ekte' automatisk.)"
     ;;
 esac
 echo ""
