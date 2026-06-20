@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="da" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SKILLeton — skill-biblioteket · ekte</title>
+  <meta name="description" content="SKILLeton er det åbne bibliotek af skills til ekte. En skill er markdown + YAML og kræver ikke AI at vedligeholde.">
+  <meta name="theme-color" content="#0c0d10">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    (function () { try { var s=localStorage.getItem('ekte-theme'); document.documentElement.setAttribute('data-theme', s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')); } catch(e){} })();
+  </script>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="index.html">ekte</a>
+  <nav class="topnav">
+    <a href="aidd.html">AIDD</a>
+    <a href="ekte.html">ekte</a>
+    <a href="skilleton.html">SKILLeton</a>
+    <a href="simple-minded.html">simple-minded</a>
+    <a href="https://github.com/danskode/SKILLeton" rel="noopener">GitHub ↗</a>
+    <button id="theme-toggle" class="theme-toggle" aria-label="Skift lys/mørk tilstand" title="Skift tema"><span class="t-dark">☾</span><span class="t-light">☀</span></button>
+  </nav>
+</header>
+
+<main>
+  <section class="subhero">
+    <pre class="eco-art" aria-label="SKILLeton">███████  ██  ██  ██████  ██     ██              █
+██       ██ ██     ██    ██     ██       ███  ████  ██  ███
+███████  ████      ██    ██     ██       █▘    █    █ █  █ █
+     ██  ██ ██     ██    ██     ██       ██    █    █ █  █ █
+███████  ██  ██  ██████  █████  █████     ██   ██   ██   █ █</pre>
+    <h1>SKILLeton</h1>
+    <p class="role">Åbent skill-bibliotek</p>
+    <p class="lead">Et bibliotek af skills til ekte. En skill er bare markdown + YAML — det
+      <strong>kræver ikke AI</strong> at vedligeholde. Det er ekte (med din valgte model) der forbruger dem.</p>
+  </section>
+
+  <div class="block">
+   <div class="prose">
+
+    <h2>Hvad er en skill?</h2>
+    <p>En markdown-fil med YAML-frontmatter, der tilføjer et system-prompt (en <em>guide</em>) til
+      arbejdet. To begreber der ikke må forveksles:</p>
+    <ul>
+      <li><strong>Installation = permanent.</strong> Når du installerer en skill, gemmes filen i
+        <code>.ekte/skills/</code> og bliver liggende.</li>
+      <li><strong>Aktivering = pr. prompt.</strong> <code>/skills &lt;navn&gt;</code> injicerer skill'ens
+        <code>## System Prompt Addition</code> i <em>næste</em> besked og nulstiller bagefter — så en
+        skill aldrig hænger ved utilsigtet.</li>
+    </ul>
+
+    <h2>Sådan indgår det i ekte</h2>
+    <p>ekte henter biblioteket ved runtime fra
+      <code>raw.githubusercontent…/SKILLeton/main/library.yaml</code>:</p>
+    <div class="cmd"><code id="c1">/skills library      # se biblioteket (✓ = installeret)
+/skills show 3       # læs en skill før install
+/skills install 1,3  # installér udvalgte
+/skills bundle aidd  # installér en hel pakke</code><button class="copy" data-copy="c1">Kopiér</button></div>
+    <p class="muted"><strong>Obligatoriske skills</strong> auto-installeres: <code>harness</code>-skills
+      altid (AIDD er præmissen for harnesset), <code>wiki</code>-skills når du tilvælger en wiki.</p>
+
+    <h2>Udvalgte skills</h2>
+    <table>
+      <thead><tr><th>Skill</th><th>Hvad</th></tr></thead>
+      <tbody>
+        <tr><td><code>spec-driven-dev</code></td><td>SDD gjort rigtigt: spec som kontrakt med adskilte concerns</td></tr>
+        <tr><td><code>intent-spec-guide</code></td><td>Intent-Specs med IDD's sproglige bevidsthed</td></tr>
+        <tr><td><code>pitch-first</code></td><td>Kritisk feature-review der starter med en pitch (AIDD)</td></tr>
+        <tr><td><code>tdd</code></td><td>Test-drevet udvikling — skriv tests først</td></tr>
+        <tr><td><code>security-review</code></td><td>Interaktiv OWASP/CWE-analyse med strukturerede fund</td></tr>
+        <tr><td><code>safe-flow</code></td><td>Deterministiske guardrails: branch-flow, pre-push, CI-gate</td></tr>
+        <tr><td><code>wiki-maintainer</code></td><td>Drift af simple-minded-wikien: ingest, gap-analyse, lint</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Pakker (bundles)</h2>
+    <p>Installér en hel kategori på én gang: <code>/skills bundle &lt;navn&gt;</code>.</p>
+    <ul>
+      <li><strong>security</strong> — security-review, secure-harness, safe-flow, secrets-hygiene</li>
+      <li><strong>ci</strong> — ci-hardening, safe-flow</li>
+      <li><strong>aidd</strong> — intent-spec-guide, spec-driven-dev, pitch-first, context-layers</li>
+      <li><strong>java</strong> · <strong>designer</strong> — sprog-/domænespecifikke startere</li>
+    </ul>
+
+    <div class="callout"><strong>Skill ≠ sensor.</strong> En skill er en <em>guide</em> (former hvordan
+      agenten arbejder, før handling). ekte's sensorer er <em>harness-kode</em> (måler resultatet, efter
+      handling). De to er bevidst adskilt.</div>
+
+    <p><a href="https://github.com/danskode/SKILLeton" rel="noopener">SKILLeton på GitHub ↗</a></p>
+    <a class="backlink" href="index.html">← Tilbage til forsiden</a>
+   </div>
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="foot-links">
+    <a href="aidd.html">AIDD</a><a href="ekte.html">ekte</a><a href="skilleton.html">SKILLeton</a><a href="simple-minded.html">simple-minded</a>
+  </div>
+  <p class="foot-note">ekte — et agent harness baseret på AIDD.</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

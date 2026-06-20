@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="da" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ekte — agent-harnesset · ekte</title>
+  <meta name="description" content="ekte er det transparente agent-harness (Go TUI) du installerer og kører. Provider-agnostisk, lokalt, bygget på AIDD.">
+  <meta name="theme-color" content="#0c0d10">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    (function () { try { var s=localStorage.getItem('ekte-theme'); document.documentElement.setAttribute('data-theme', s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')); } catch(e){} })();
+  </script>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="index.html">ekte</a>
+  <nav class="topnav">
+    <a href="aidd.html">AIDD</a>
+    <a href="ekte.html">ekte</a>
+    <a href="skilleton.html">SKILLeton</a>
+    <a href="simple-minded.html">simple-minded</a>
+    <a href="https://github.com/danskode/ekte" rel="noopener">GitHub ↗</a>
+    <button id="theme-toggle" class="theme-toggle" aria-label="Skift lys/mørk tilstand" title="Skift tema"><span class="t-dark">☾</span><span class="t-light">☀</span></button>
+  </nav>
+</header>
+
+<main>
+  <section class="subhero">
+    <pre class="eco-art" aria-label="ekte">   █████   ██   ██  ████   █████
+  ██       █████      ██    ██
+  ██       ██  ██     ██    █████
+   █████   ██   ██  ██████  █████</pre>
+    <h1>ekte</h1>
+    <p class="role">Agent-harnesset (Go TUI)</p>
+    <p class="lead">Det du installerer og kører. Al logik lever her — slash-kommandoer, sensor-loop,
+      hooks, hukommelse. Provider-agnostisk, lokalt, bygget på AIDD.</p>
+  </section>
+
+  <div class="block">
+   <div class="prose">
+
+    <h2>Installation</h2>
+    <p>Henter seneste release, verificerer checksum og installerer til <code>~/.local/bin</code>:</p>
+    <div class="cmd"><code id="c1">curl -fsSL https://raw.githubusercontent.com/danskode/ekte/main/install.sh | sh</code><button class="copy" data-copy="c1">Kopiér</button></div>
+    <p class="muted">macOS &amp; Linux · checksum-verificeret · Windows via WSL. Se forsiden for "inspicér
+      først"- og <code>go install</code>-varianter.</p>
+    <p>Derefter:</p>
+    <div class="cmd"><code id="c2">cd dit-projekt &amp;&amp; ekte</code><button class="copy" data-copy="c2">Kopiér</button></div>
+
+    <h2>Sådan indgår det i økosystemet</h2>
+    <p>ekte er styringen. Det <strong>henter skills fra <a href="skilleton.html">SKILLeton</a></strong>
+      ved runtime, og <strong>kloner <a href="simple-minded.html">simple-minded</a></strong> som dit
+      videnslager hvis du tilvælger en wiki. De to andre er rene data; ekte (med din valgte model)
+      forbruger og vedligeholder dem.</p>
+
+    <h2>AIDD-kerneflowet</h2>
+    <ul>
+      <li><strong><code>/plan</code></strong> — kvalificér intentionen (ICE); <code>/plan godkend</code>
+        udtrækker testbare succeskriterier.</li>
+      <li><strong><code>/goal</code></strong> — autonom bygge-løkke: skriv kode → kør tjek-hook →
+        inferentiel verifikation (sikkerhed + intent-conformance) → din accept.</li>
+      <li><strong><code>/verify</code> · <code>/review</code></strong> — kør sensorerne ad hoc
+        (også som <code>ekte verify</code> / <code>ekte review</code> til pre-push).</li>
+    </ul>
+    <p>En <code>/goal</code>-kørsel er ikke færdig fordi koden kompilerer — den er færdig når den
+      både består de tekniske tjek <em>og</em> beviseligt opfylder dine succeskriterier, og du har
+      godkendt det. <a class="more" href="aidd.html">Hvorfor: AIDD →</a></p>
+
+    <h2>Kommandoer i overblik</h2>
+    <ul>
+      <li><strong>AIDD-flow:</strong> <code>/plan</code> · <code>/goal</code> · <code>/verify</code> · <code>/review</code> · <code>/orchestrate</code></li>
+      <li><strong>Skills:</strong> <code>/skills library</code> · <code>show</code> · <code>install</code> · <code>bundle</code></li>
+      <li><strong>Projekt/hooks:</strong> <code>/init</code> · <code>/hook</code> · <code>/spec</code></li>
+      <li><strong>Wiki/hukommelse:</strong> <code>/wiki</code> · <code>/wiki-gem</code> · <code>/remember</code> · <code>/forresten</code></li>
+      <li><strong>Sikkerhed:</strong> <code>/dep</code> · <code>/sec-check</code> · <code>/security</code></li>
+    </ul>
+
+    <h2>Sikkerhedsmodel (kort)</h2>
+    <ul>
+      <li>Fil-tools er sandkasse-låst til projektmappen.</li>
+      <li>Tillid bestemmes af <em>oprindelse</em>, ikke kommando-streng; <code>run_hook</code> kræver bekræftelse.</li>
+      <li>Hemmeligheder redakteres før diffs sendes til en provider; sikkerheds-gates fejler lukket.</li>
+      <li>Persisteret kontekst (memory, <code>ekte.md</code>) bekræftes før skrivning.</li>
+    </ul>
+
+    <p><a href="https://github.com/danskode/ekte/blob/main/README.md" rel="noopener">Fuld dokumentation i README ↗</a></p>
+    <a class="backlink" href="index.html">← Tilbage til forsiden</a>
+   </div>
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="foot-links">
+    <a href="aidd.html">AIDD</a><a href="ekte.html">ekte</a><a href="skilleton.html">SKILLeton</a><a href="simple-minded.html">simple-minded</a>
+  </div>
+  <p class="foot-note">ekte — et agent harness baseret på AIDD.</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

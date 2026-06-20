@@ -161,8 +161,36 @@ main { max-width: 1080px; margin: 0 auto; padding: 0 clamp(1rem, 4vw, 2rem); }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 640px) {
-  .topnav a:not(:last-of-type) { display: none; }
+  .topnav a { font-size: .82rem; }
   .flow-arrow { display: none; }
   .cmd { flex-direction: column; }
   .copy { align-self: stretch; }
 }
+
+/* ---------- AIDD-blurb + diverse links ---------- */
+.aidd-blurb { background: var(--panel); border-radius: 14px; padding: 1.6rem clamp(1.2rem, 4vw, 2rem); }
+.aidd-blurb p { color: var(--text); max-width: 75ch; }
+.aidd-blurb strong { color: var(--accent); }
+.more { font-family: ui-monospace, monospace; font-weight: 600; }
+.eco-links { margin-top: auto !important; font-family: ui-monospace, monospace; font-size: .85rem; }
+
+/* ---------- Undersider ---------- */
+.subhero { text-align: center; padding: clamp(2rem, 6vw, 3.5rem) 0 1.5rem; }
+.subhero .eco-art, .subhero .logo { display: inline-block; text-align: left; }
+.subhero h1 { font-size: clamp(1.6rem, 4vw, 2.4rem); margin: 1rem 0 .3rem; }
+.subhero .role { color: var(--accent); font-family: ui-monospace, monospace; margin: 0 0 .6rem; }
+.subhero .lead { color: var(--muted); max-width: 60ch; margin: 0 auto; }
+.backlink { display: inline-block; margin: 1.5rem 0 0; color: var(--muted); font-size: .9rem; }
+.prose { max-width: 75ch; }
+.prose h2 { font-size: clamp(1.3rem, 3vw, 1.7rem); margin: 2rem 0 .5rem; }
+.prose h3 { margin: 1.4rem 0 .4rem; }
+.prose p, .prose li { color: var(--text); }
+.prose .muted { color: var(--muted); }
+.prose ul { padding-left: 1.2rem; }
+.prose li { margin: .3rem 0; }
+.prose table { width: 100%; border-collapse: collapse; margin: 1.2rem 0; font-size: .9rem; }
+.prose th, .prose td { border: 1px solid var(--border); padding: .55rem .7rem; text-align: left; vertical-align: top; }
+.prose th { background: var(--panel-2); }
+.prose tr:nth-child(even) td { background: var(--panel); }
+.callout { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 10px; padding: 1rem 1.2rem; margin: 1.4rem 0; }

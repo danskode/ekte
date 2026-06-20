@@ -25,11 +25,12 @@
 <body>
 
 <header class="topbar">
-  <a class="brand" href="#top">ekte</a>
+  <a class="brand" href="index.html">ekte</a>
   <nav class="topnav">
-    <a href="#install">Installation</a>
-    <a href="#flow">AIDD-flowet</a>
-    <a href="#okosystem">Økosystem</a>
+    <a href="aidd.html">AIDD</a>
+    <a href="ekte.html">ekte</a>
+    <a href="skilleton.html">SKILLeton</a>
+    <a href="simple-minded.html">simple-minded</a>
     <a href="https://github.com/danskode/ekte" rel="noopener">GitHub ↗</a>
     <button id="theme-toggle" class="theme-toggle" aria-label="Skift lys/mørk tilstand" title="Skift tema">
       <span class="t-dark">☾</span><span class="t-light">☀</span>
@@ -60,6 +61,18 @@
       <button class="copy" data-copy="cmd-hero" aria-label="Kopiér">Kopiér</button>
     </div>
     <p class="micro">macOS &amp; Linux · checksum-verificeret · Windows via WSL</p>
+  </section>
+
+  <!-- HVAD ER AIDD -->
+  <section class="block aidd-blurb">
+    <h2>Hvad er AIDD?</h2>
+    <p><strong>AIDD — Architecture of Intent-Driven Development.</strong> En paraply over de
+      intent- og verifikations-orienterede tilgange (SDD → IDD → IDSD/ICE → Architect of Intent,
+      og TDD/EDD på verifikations-siden). Kernen: når "naturligt sprog" bliver det nye, men
+      <em>tvetydige og probabilistiske</em> programmeringssprog, må man eksternalisere sin
+      intention bevidst og designe de guardrails der styrer agenten — frem for at håbe at mening
+      overføres som en pakke. ekte er et harness bygget på AIDD.</p>
+    <p><a class="more" href="aidd.html">Læs hele AIDD-konceptet →</a></p>
   </section>
 
   <!-- INSTALL -->
@@ -184,7 +197,7 @@ sh install.sh</code>
         <p class="eco-role">Harnesset (Go TUI)</p>
         <p>Det du installerer og kører. Al logik lever her — slash-kommandoer, sensor-loop, hooks, hukommelse.</p>
         <p class="eco-how"><strong>Indgår sådan:</strong> det er selve værktøjet.</p>
-        <a class="eco-link" href="https://github.com/danskode/ekte" rel="noopener">danskode/ekte ↗</a>
+        <p class="eco-links"><a href="ekte.html">Læs mere →</a> · <a href="https://github.com/danskode/ekte" rel="noopener">GitHub ↗</a></p>
       </article>
 
       <article class="eco-card">
@@ -197,18 +210,21 @@ sh install.sh</code>
         <p class="eco-role">Åbent skill-bibliotek</p>
         <p>Skills er markdown + YAML — <em>kræver ikke AI</em> at vedligeholde. Det er ekte (med din valgte model) der forbruger dem.</p>
         <p class="eco-how"><strong>Indgår sådan:</strong> ekte henter biblioteket ved runtime. <code>/skills library</code> → install til <code>.ekte/skills/</code> (permanent) → aktivér pr. prompt med <code>/skills &lt;navn&gt;</code>.</p>
-        <a class="eco-link" href="https://github.com/danskode/SKILLeton" rel="noopener">danskode/SKILLeton ↗</a>
+        <p class="eco-links"><a href="skilleton.html">Læs mere →</a> · <a href="https://github.com/danskode/SKILLeton" rel="noopener">GitHub ↗</a></p>
       </article>
 
       <article class="eco-card">
-        <pre class="eco-art" aria-label="simple-minded">  ┌─ simple ─────────┐
-  │  minded · wiki    │
-  └──── template ─────┘</pre>
+        <pre class="eco-art" aria-label="simple-minded">█▀▀ █ █▀▄▀█ █▀█ █   █▀▀
+▀▀█ █ █ ▀ █ █▀▀ █   █▀▀
+▀▀▀ ▀ ▀   ▀ ▀   ▀▀▀ ▀▀▀
+█▀▄▀█ █ █▄ █ █▀▄ █▀▀ █▀▄
+█ ▀ █ █ █ ▀█ █ █ █▀▀ █ █
+▀   ▀ ▀ ▀  ▀ ▀▀  ▀▀▀ ▀▀ </pre>
         <h3>simple-minded</h3>
         <p class="eco-role">Wiki-template (videnslager)</p>
         <p>Et agnostisk template til en LLM-vedligeholdt wiki. Du kuraterer kilderne; agenten gør bogføringen. Wikien er artefaktet — chatten er forgængelig.</p>
         <p class="eco-how"><strong>Indgår sådan:</strong> klones af ekte via <code>ekte init</code> → vælg "wiki". Valgfrit AIDD-indhold på <code>aidd</code>-branchen; driftes via <code>wiki-maintainer</code>-skill'en.</p>
-        <a class="eco-link" href="https://github.com/danskode/simple-minded" rel="noopener">danskode/simple-minded ↗</a>
+        <p class="eco-links"><a href="simple-minded.html">Læs mere →</a> · <a href="https://github.com/danskode/simple-minded" rel="noopener">GitHub ↗</a></p>
       </article>
     </div>
   </section>

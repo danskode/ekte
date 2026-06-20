@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="da" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>simple-minded — wiki-templaten · ekte</title>
+  <meta name="description" content="simple-minded er et agnostisk template til en LLM-vedligeholdt wiki — videnslageret bag ekte. Du kuraterer kilderne; agenten gør bogføringen.">
+  <meta name="theme-color" content="#0c0d10">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    (function () { try { var s=localStorage.getItem('ekte-theme'); document.documentElement.setAttribute('data-theme', s||(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')); } catch(e){} })();
+  </script>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="index.html">ekte</a>
+  <nav class="topnav">
+    <a href="aidd.html">AIDD</a>
+    <a href="ekte.html">ekte</a>
+    <a href="skilleton.html">SKILLeton</a>
+    <a href="simple-minded.html">simple-minded</a>
+    <a href="https://github.com/danskode/simple-minded" rel="noopener">GitHub ↗</a>
+    <button id="theme-toggle" class="theme-toggle" aria-label="Skift lys/mørk tilstand" title="Skift tema"><span class="t-dark">☾</span><span class="t-light">☀</span></button>
+  </nav>
+</header>
+
+<main>
+  <section class="subhero">
+    <pre class="eco-art" aria-label="simple-minded">█▀▀ █ █▀▄▀█ █▀█ █   █▀▀
+▀▀█ █ █ ▀ █ █▀▀ █   █▀▀
+▀▀▀ ▀ ▀   ▀ ▀   ▀▀▀ ▀▀▀
+█▀▄▀█ █ █▄ █ █▀▄ █▀▀ █▀▄
+█ ▀ █ █ █ ▀█ █ █ █▀▀ █ █
+▀   ▀ ▀ ▀  ▀ ▀▀  ▀▀▀ ▀▀ </pre>
+    <h1>simple-minded</h1>
+    <p class="role">Wiki-template (videnslager)</p>
+    <p class="lead">Et agnostisk template til en LLM-vedligeholdt wiki — videnslageret bag ekte.
+      Du kuraterer kilderne; agenten gør bogføringen. <strong>Wikien er artefaktet — chatten er forgængelig.</strong></p>
+  </section>
+
+  <div class="block">
+   <div class="prose">
+
+    <h2>Hvad det er</h2>
+    <p>Rene data: markdown-sider + et indeks + et lille søgeskript. I modsætning til RAG, hvor man
+      henter tekststumper on demand, bygger denne wiki <em>persistente, krydshenviste sider</em> der
+      bliver rigere for hver kilde du tilføjer. Der er ingen <code>CLAUDE.md</code> — ekte er styringen,
+      og driften sker via <code>wiki-maintainer</code>-skill'en.</p>
+
+    <h2>Sådan indgår det i ekte</h2>
+    <p>simple-minded klones som dit videnslager når du sætter en wiki op:</p>
+    <div class="cmd"><code id="c1">ekte init   # vælg "wiki" → simple-minded klones</code><button class="copy" data-copy="c1">Kopiér</button></div>
+    <p>Under opsætningen kan du tilvælge <strong>standard AIDD-indhold</strong> (færdige wiki-sider om
+      AIDD) — det ligger på <code>aidd</code>-branchen. Vælger du fra, får du et tomt template på <code>main</code>.</p>
+
+    <h2>Brug</h2>
+    <table>
+      <thead><tr><th>Handling</th><th>Hvordan</th></tr></thead>
+      <tbody>
+        <tr><td>Slå op</td><td><code>/wiki "spørgsmål"</code> — ekte finder relevante sider og syntetiserer et svar</td></tr>
+        <tr><td>Gem et svar som side</td><td><code>/wiki-gem &lt;titel&gt;</code></td></tr>
+        <tr><td>Ingest, gap-analyse, lint</td><td>aktivér <code>wiki-maintainer</code>-skill'en (auto-installeres når du tilvælger wiki)</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Struktur</h2>
+    <p>Sider ligger i typede mapper: <code>concepts/</code>, <code>patterns/</code>, <code>models/</code>,
+      <code>papers/</code>, <code>people/</code>, <code>synthesis/</code>, <code>connections/</code> (bro-sider
+      mellem begrebsklynger) og <code>questions/</code> (åbne spørgsmål fra gap-analyse). Hver side har
+      YAML-frontmatter. <code>raw/</code> er <strong>ukrænkelig</strong> — kildefiler ændres aldrig;
+      annotering hører hjemme på wiki-siden.</p>
+
+    <div class="callout">Kompoundering frem for kontekst-genbrug: wikiens fordel over RAG er at den kan
+      holde indsigter der kun opstår ved at læse flere kilder <em>sammen</em> — fanget i bro-sider.</div>
+
+    <p><a href="https://github.com/danskode/simple-minded" rel="noopener">simple-minded på GitHub ↗</a></p>
+    <a class="backlink" href="index.html">← Tilbage til forsiden</a>
+   </div>
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="foot-links">
+    <a href="aidd.html">AIDD</a><a href="ekte.html">ekte</a><a href="skilleton.html">SKILLeton</a><a href="simple-minded.html">simple-minded</a>
+  </div>
+  <p class="foot-note">ekte — et agent harness baseret på AIDD.</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

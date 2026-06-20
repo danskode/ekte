@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="da" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AIDD — Architecture of Intent-Driven Development · ekte</title>
+  <meta name="description" content="AIDD er en paraply over de intent- og verifikations-orienterede tilgange (SDD, IDD, IDSD/ICE, Architect of Intent, TDD/EDD), forankret i et nuanceret syn på naturligt sprog som det nye, tvetydige programmeringssprog.">
+  <meta name="theme-color" content="#0c0d10">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('ekte-theme');
+        var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="index.html">ekte</a>
+  <nav class="topnav">
+    <a href="aidd.html">AIDD</a>
+    <a href="ekte.html">ekte</a>
+    <a href="skilleton.html">SKILLeton</a>
+    <a href="simple-minded.html">simple-minded</a>
+    <a href="https://github.com/danskode/ekte" rel="noopener">GitHub ↗</a>
+    <button id="theme-toggle" class="theme-toggle" aria-label="Skift lys/mørk tilstand" title="Skift tema">
+      <span class="t-dark">☾</span><span class="t-light">☀</span>
+    </button>
+  </nav>
+</header>
+
+<main>
+  <section class="subhero">
+    <h1>AIDD</h1>
+    <p class="role">Architecture of Intent-Driven Development</p>
+    <p class="lead">En paraply over de intent- og verifikations-orienterede tilgange — forankret i
+      ét skifte: "naturligt sprog" er blevet det nye, men <em>tvetydige</em>, programmeringssprog.</p>
+  </section>
+
+  <div class="block">
+   <div class="prose">
+
+    <h2>Kernen: naturligt sprog er det nye programmeringssprog — men det er tvetydigt</h2>
+    <p>Klassiske programmeringssprog er deterministiske: samme input giver samme output, og fejl er
+      logiske eller syntaktiske. Med kodeagenter og sprogmodeller er "naturligt sprog" blevet måden
+      vi udvikler på — men naturligt sprog er probabilistisk og fuldt af vaghed, underforståetheder
+      og forglemmelser. Som Francesco Marconi formulerer det: <em>"The problem isn't that the AI is
+      hallucinating. The problem is that natural language is inherently ambiguous."</em></p>
+    <p>Konsekvensen: man kan ikke længere antage at mening overføres som en pakke, hvor man bare skal
+      være "præcis nok". AIDD tager dét alvorligt og gør <strong>eksternalisering af intention</strong>
+      til en disciplin — du strukturerer agentens inferensmiljø og begrænser fortolkningsrummet, frem
+      for at håbe på korrekt gætning.</p>
+
+    <h2>Paraplyen — hvad AIDD samler</h2>
+    <p>AIDD opfinder ikke noget fra bunden; det navngiver og forener en udvikling der allerede sker
+      på tværs af flere tilgange, og tilføjer et sprogligt fundament.</p>
+
+    <h3>SDD — Spec-Driven Development</h3>
+    <p>Den rette grundintuition (definér <em>hvad</em> før agenten genererer), men single-document-fælden:
+      ét dokument kan ikke være intent + definition-of-done + kontekst på én gang — og "du kan ikke
+      skrive specen perfekt på forhånd" (Ahuja). <span class="muted">Se også skill'en
+      <code>spec-driven-dev</code> i SKILLeton.</span></p>
+
+    <h3>IDD — Intent-Driven Development (Molinari)</h3>
+    <p>Vender 80/20 om: brug 80% af tiden på at definere constraints og verifikation, lad AI håndtere
+      implementeringen. "The Intent is the Source Code; the actual files are merely the compiled
+      artifacts." Udvikleren bliver <em>Architect of Intent</em> — definerer "hvorfor", agenten "hvordan".</p>
+
+    <h3>IDSD / ICE — Intent-Driven Software Development (Ahuja)</h3>
+    <p>Deler specen op i tre crafts med hvert sit ejerskab: <strong>Intent · Context · Expectations</strong>.
+      En intent har fem dele (ønske, afgrænsninger, fejl-scenarier, succes-scenarier, relationer), og
+      <em>loop-presence</em> — at blive i loopet mens agenten arbejder — er det der forhindrer drift.</p>
+
+    <h3>AOI — Architect of Intent (Molinari / Santos)</h3>
+    <p>Rollen: udvikleren er ikke længere murer der lægger hver sten, men arkitekten der definerer
+      destinationen — "turn ambiguity into a concrete plan, anticipate edge cases before code exists,
+      and notice when code is 'correct' but misaligned with the real problem" (Santos).</p>
+
+    <h3>TDD / EDD — verifikations-arven</h3>
+    <p>Vi skal stadig teste software — vi skriver bare ikke længere selv testene. Test- og
+      eval-drevne tilgange bidrager med den anden halvdel: <em>verifikation som definition of done</em>.
+      I AIDD bliver det til en verifikations-fase hvor output måles mod den eksternaliserede intention.</p>
+
+    <h2>Forgænger → bidrag → hvad AIDD tilføjer</h2>
+    <table>
+      <thead><tr><th>Tilgang</th><th>Bidrag</th><th>Hvad AIDD tilføjer</th></tr></thead>
+      <tbody>
+        <tr><td>SDD</td><td>Definér før generering</td><td>Anerkender at specen aldrig bliver 1:1 med verden; adskiller concerns</td></tr>
+        <tr><td>IDD</td><td>80/20-inversion; intent som kilde</td><td>Forklarer <em>hvorfor</em> det virker via sprogteori</td></tr>
+        <tr><td>IDSD/ICE</td><td>Intent·Context·Expectations; loop-presence</td><td>Systematisk forebyggelse af <em>abuse</em>, ikke kun misfire</td></tr>
+        <tr><td>AOI</td><td>Udvikleren som intent-arkitekt</td><td>Et sprogsyn rollen kan stå på (syntetisk ToM)</td></tr>
+        <tr><td>TDD/EDD</td><td>Verifikation som done</td><td>Verifikation målt mod intentionen, ikke kun mod kode der kompilerer</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Det sproglige fundament</h2>
+    <p>Det genuint nye i AIDD er at gøre sprogteori operationel i agentic engineering:</p>
+    <ul>
+      <li><strong>William James</strong> — bevidsthedens <em>substantive</em> og <em>transitive</em>
+        tilstande: det vi ikke får sat ord på (det transitive) er præcis de huller agenten udfylder.
+        AIDD eksternaliserer det transitive.</li>
+      <li><strong>J.L. Austin & Searle</strong> — talehandlinger og deres vellykkethedsbetingelser:
+        <em>misfire</em> (handlingen lykkes ikke) vs. <em>abuse</em> (handlingen lykkes formelt, men
+        betingelserne var ikke opfyldt). Agentens hallucinationer/drift er abuse — og den er usynlig.</li>
+      <li><strong>Lakoff & Johnson</strong> — kanalmetaforen bryder sammen: mening sendes ikke som en
+        pakke, den <em>konstrueres</em> hos modtageren. Derfor arkitektur frem for "bedre indpakning".</li>
+      <li><strong>Syntetisk Theory of Mind</strong> — agenten opfører sig intentionelt uden at <em>være</em>
+        intentionel og har ingen reparationsmekanisme (spørger ikke selv op). Udvikleren må eksternalisere
+        fuldstændigt — ikke fordi agenten er dummere end et menneske, men fordi den er fundamentalt anderledes.</li>
+    </ul>
+
+    <h2>AIDD i praksis — i ekte</h2>
+    <p>ekte er et harness bygget på AIDD. Flowet realiserer de tre faser direkte:</p>
+    <ul>
+      <li><strong>Definition</strong> — <code>/plan</code> kvalificerer intent via ICE; Expectations
+        bliver testbare succeskriterier.</li>
+      <li><strong>Generation</strong> — <code>/goal</code> implementerer autonomt mod planen.</li>
+      <li><strong>Verification</strong> — sensorer (computationel + inferentiel) måler mod intentionen;
+        <code>/verify</code> kører dem ad hoc; du har den endelige accept.</li>
+    </ul>
+    <p><a class="more" href="ekte.html">Se ekte → </a></p>
+
+    <p class="muted" style="margin-top:2rem;font-size:.85rem;">Kilder/tænkere: Marconi (ISL), Molinari (IDD),
+      Ahuja (IDSD/ICE), Santos (intent architect), Austin & Searle (talehandlinger), William James
+      (bevidsthedsstrøm), Lakoff & Johnson (kanalmetaforen), Böckeler (harness). AIDD-rammen er
+      formuleret i forfatterens AI Engineering-opgave.</p>
+
+    <a class="backlink" href="index.html">← Tilbage til forsiden</a>
+   </div>
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="foot-links">
+    <a href="aidd.html">AIDD</a>
+    <a href="ekte.html">ekte</a>
+    <a href="skilleton.html">SKILLeton</a>
+    <a href="simple-minded.html">simple-minded</a>
+  </div>
+  <p class="foot-note">ekte — et agent harness baseret på AIDD.</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
