@@ -391,19 +391,29 @@ ekte har en let, men reel pipeline. Status pr. nu:
 - `go vet ./...` + `go test -race ./...` på `ubuntu-latest`, Go-version fra `go.mod`.
 - Actions er **SHA-pinnede**; Dependabot holder dem opdaterede (`.github/dependabot` + PR'er).
 
-**Release — `.github/workflows/release.yml`** ✅ *på plads*
-- Trigges af **`v*`-tags** (fx `git tag v0.3.0 && git push --tags`).
-- **goreleaser** (`.goreleaser.yaml`) bygger cross-platform binærer og publicerer en
-  GitHub Release. ekte er en CLI, så "CD" = release-artefakter, ikke server-deploy.
+**Release — `.github/workflows/release-please.yml`** ✅ *automatiseret*
+- **release-please** vedligeholder en **release-PR** på `main` med auto-genereret changelog +
+  næste semver, udledt af **Conventional Commits** (`feat:` → minor, `fix:` → patch,
+  `feat!:`/`BREAKING CHANGE` → major). Når du merger PR'en, oprettes tag + GitHub Release.
+- **goreleaser** (`.goreleaser.yaml`) kører i samme workflow (betinget af release-please) og
+  uploader cross-platform binærer + `checksums.txt` til releasen. ekte er en CLI, så "CD" =
+  release-artefakter, ikke server-deploy.
+- Releases er stadig **bevidste** (du merger release-PR'en), men kræver intet manuelt tagging.
+
+**Deploy — `.github/workflows/pages.yml`** ✅ *på plads*
+- Landingpagen i `site/` deployes til GitHub Pages (`danskode.github.io/ekte`) ved push til `main`.
 
 **Maintainer-side gate** (ikke en del af CI)
 - En lokal **pre-push hook** (`scripts/pre-push.sh` + `security-review.sh`) kører et
   LLM-baseret sikkerhedsreview af upushede commits og blokerer ved medium+ fund. Det er
   *ikke-deterministisk* og bevidst adskilt fra den agnostiske `ekte verify`/`ekte review`.
 
+**Conventional Commits** — brug `feat:`, `fix:`, `docs:`, `chore:`, `refactor:` (+ `!`/
+`BREAKING CHANGE` for major), så release-please kan udlede versioner og changelog automatisk.
+
 **Udestående / mulige forbedringer**
 - CI kører kun `go vet` — ingen `golangci-lint`-trin endnu (kan køres lokalt via hook).
-- Ingen coverage-gate; releases tagges manuelt.
+- Ingen coverage-gate.
 
 **Lokal udvikling**
 
@@ -450,7 +460,7 @@ ekte/
 │   ├── wiki/                 # query, gem, ingest (sandkasse + SSRF-værn)
 │   ├── secret/ · consent/ · netsafe/ · container/   # sikkerheds-primitiver
 │   └── tui/                  # Bubbletea-præsentationslag (ingen logik)
-└── .github/workflows/        # ci.yml, release.yml
+└── .github/workflows/        # ci.yml, pages.yml, release-please.yml
 ```
 
 **Lagdeling:** al logik lever i `internal/agent`, der eksponerer

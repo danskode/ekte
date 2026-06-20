@@ -28,6 +28,9 @@ release:
   github:
     owner: danskode
     name: ekte
+  # release-please opretter selve releasen (med changelog); goreleaser tilføjer
+  # blot binærerne til den eksisterende release frem for at oprette/overskrive den.
+  mode: append
 
 changelog:
   sort: asc
