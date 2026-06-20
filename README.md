@@ -9,331 +9,308 @@
      et agent harness baseret på AIDD
 ```
 
-En personlig AI-assistent til softwareudvikling, bygget som et Go TUI-program.
-Køres direkte i terminalen — ingen browser, ingen cloud-dashboard.
+**ekte** er et transparent agent-harness til softwareudvikling, bygget som et Go
+TUI-program. Det kører direkte i terminalen — ingen browser, intet cloud-dashboard —
+og er bygget op om **AIDD** (*Architecture of Intent-Driven Development*): du
+kvalificerer din *intention*, agenten implementerer, og harnesset *verificerer*
+resultatet mod intentionen før noget regnes som færdigt.
 
-## Installation
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/danskode/ekte/main/install.sh | sh
-```
-
-Kræver: `git`, `curl` eller `wget`. Installerer til `~/.local/bin` — ingen sudo, ingen pakkemanager.
-
-```
-┌─────────────────────────────────────────────────────────┐
-│ ekte                                    /hjælp           │
-│  Hvad vil du bygge i dag?                               │
-│                                                         │
-│ Du                                                      │
-│  /dep github.com/gin-gonic/gin                          │
-│                                                         │
-│ ekte                                                    │
-│  ✓ Score hentet — se tool-panelet                       │
-├─────────────────────────────────────────────────────────┤
-│ Skriv her... (Enter sender, Shift+Enter = ny linje)     │
-├─────────────────────────────────────────────────────────┤
-│ kontekst: 1240/200000                          /hjælp   │
-└─────────────────────────────────────────────────────────┘
-```
+ekte er **provider-agnostisk** (Anthropic, OpenAI eller en lokal model via
+Ollama/LM Studio), **lokalt** (din kode og dine nøgler forlader ikke maskinen ud
+over kald til den provider *du* vælger) og **gennemsigtigt** (alle mekanismer er
+synlige Go-primitiver, ikke skjult magi).
 
 ---
 
 ## Indhold
 
-- [Forudsætninger](#forudsætninger)
-- [Installation](#installation)
-- [Første opsætning](#første-opsætning)
-- [Konfiguration](#konfiguration)
-- [Slash commands](#slash-commands)
-- [Skills](#skills)
-- [Wiki](#wiki)
-- [Mappestruktur](#mappestruktur)
+1. [Hvad er ekte?](#hvad-er-ekte)
+2. [Installation](#installation)
+3. [Kom i gang på 3 minutter](#kom-i-gang-på-3-minutter)
+4. [Kerneflowet: AIDD i praksis](#kerneflowet-aidd-i-praksis)
+5. [Konfiguration](#konfiguration)
+6. [Sikkerhedsmodel](#sikkerhedsmodel)
+7. [Kommandoreference](#kommandoreference)
+8. [Skills & SKILLeton](#skills--skilleton)
+9. [Wiki & hukommelse](#wiki--hukommelse)
+10. [Afhængigheds-sikkerhed](#afhængigheds-sikkerhed)
+11. [CI/CD & udvikling](#cicd--udvikling)
+12. [Projektstruktur & arkitektur](#projektstruktur--arkitektur)
 
 ---
 
-## Forudsætninger
+## Hvad er ekte?
 
-- Go 1.21 eller nyere
-- Git
-- En API-nøgle til Anthropic eller OpenAI (eller en lokal Ollama-instans)
+De fleste AI-kodeværktøjer er en chat med værktøjer. ekte er et **harness**: en
+kode-løkke der omslutter sprogmodellen med *guides* (føred-kontroller: system-prompt,
+skills, plan-mode) og *sensors* (efter-kontroller: tests, sikkerheds- og
+intent-verifikation). Det giver en disciplineret arbejdsgang frem for fri improvisation.
+
+Den røde tråd er **intentionen**:
+
+```
+   DEFINITION              GENERATION             VERIFICATION
+   (din intention)   →     (agenten koder)   →    (sensorer måler mod intentionen)
+   /plan (ICE)             /goal-loopet           computationel + inferentiel sensor
+                                                  + din endelige accept (HITL)
+```
+
+Det betyder at en `/goal`-kørsel ikke er "færdig", fordi koden *kompilerer* — den er
+færdig, når den både består de tekniske tjek **og** beviseligt opfylder de
+succeskriterier du opstillede, og **du** har godkendt det.
 
 ---
 
 ## Installation
 
+**Hurtigst (anbefalet):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danskode/ekte/main/install.sh | sh
+```
+
+Installerer til `~/.local/bin` — ingen sudo, ingen pakkemanager. Kræver `git` og
+`curl`/`wget`.
+
+**Fra kildekode** (kræver Go 1.25+):
+
 ```bash
 git clone https://github.com/danskode/ekte.git
 cd ekte
-go build -o ekte ./cmd/ekte
-sudo mv ekte /usr/local/bin/   # eller et andet sted i din PATH
+go install ./cmd/ekte    # lægger binæren i $(go env GOPATH)/bin
 ```
+
+Sørg for at install-mappen er i din `PATH`.
 
 ---
 
-## Første opsætning
+## Kom i gang på 3 minutter
 
-Gå til mappen for det projekt du vil arbejde på, og kør:
+**1 — Gå til dit projekt og start ekte:**
 
 ```bash
 cd ~/projekter/mit-projekt
 ekte
 ```
 
-Ved første kørsel guides du igennem en kort onboarding:
+**2 — Følg onboarding** (kun første gang). Du bekræfter at du stoler på mappen,
+beskriver projektet kort (gemmes som `ekte.md`), vælger navn, og sætter provider/model
+op (skrives til `.ekte/config.yaml`). Wiki er valgfrit.
 
-1. **Tillid** — bekræft at du stoler på mappen
-2. **Projektbeskrivelse** — besvar et par spørgsmål om projektet; svaret gemmes som `ekte.md`
-3. **Navn** — hvad vil du kaldes, og hvad skal din agent hedde?
-4. **Modelopsætning** — ekte skriver provider og model til `.ekte/config.yaml`. Du kan altid redigere filen senere
-5. **Wiki** — valgfrit: sæt en personlig wiki op til videndeling på tværs af projekter
-
-### Modelopsætning — `.ekte/config.yaml`
-
-Provider og model konfigureres i `.ekte/config.yaml` i projektmappen. Filen oprettes automatisk ved onboarding, men kan også oprettes/redigeres manuelt.
-
-```yaml
-# Anthropic
-provider: anthropic
-model: claude-sonnet-4-6
-
-# OpenAI
-provider: openai
-model: gpt-4o-mini
-
-# Lokal Ollama (bruges via OpenAI-kompatibelt API)
-provider: openai
-model: llama3.2
-base_url: http://localhost:11434/v1
-```
-
-For at skifte model: rediger `model:`-feltet og genstart `ekte`.
-
-### API-nøgle (kun i miljøvariabler)
-
-ekte gemmer **aldrig** API-nøgler i `config.yaml` — kun i miljøvariabler.
-Nøgler i filer risikerer at lække via git-historik.
+**3 — Sæt din API-nøgle** (kun i miljøvariabler — aldrig i config):
 
 ```bash
-# Anthropic
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# OpenAI
-export OPENAI_API_KEY="sk-..."
-
-# Tilføj til ~/.bashrc eller ~/.zshrc så den huskes permanent
+export ANTHROPIC_API_KEY="sk-ant-..."   # eller OPENAI_API_KEY
 ```
 
-For lokal Ollama er API-nøgle ikke nødvendig — den kører lokalt:
+Bruger du en lokal model (Ollama/LM Studio) er ingen nøgle nødvendig.
 
-```bash
-ollama pull llama3.2
-ollama serve   # hvis den ikke allerede kører som service
+**Så er du i gang.** Skriv almindeligt sprog, eller brug en slash-kommando. `/hjælp`
+viser alt. For den fulde AIDD-arbejdsgang, læs næste afsnit.
+
+> Vil du bare have et hurtigt build-loop op at køre? Tilføj et tjek-hook og kør
+> `/goal` (se [Kerneflowet](#kerneflowet-aidd-i-praksis)).
+
+---
+
+## Kerneflowet: AIDD i praksis
+
+Dette er det ekte er bygget til. Arbejdsgangen har tre faser.
+
+### 1. Definér intentionen — `/plan`
+
+`/plan` sætter dig i **Architect of Intent**-mode. Agenten stiller spørgsmål, ét ad
+gangen, og hjælper dig med at kvalificere intentionen efter **ICE** (Intent, Context,
+Expectations). Den skriver ikke kode her — den hjælper dig med at gøre *hvad* og
+*hvornår det er lykkedes* præcist.
+
+```
+/plan byg et login-endpoint med rate limiting
+…
+/plan godkend
 ```
 
-### Lokale providers og samtykke
+Ved `/plan godkend` destilleres dine **Expectations** til konkrete succeskriterier —
+rubrikken resten af flowet måler imod.
 
-Når `base_url` peger på en privat adresse (fx `http://localhost:11434/v1`),
-spørger ekte ved første opstart: *"config peger på \<URL\> (privat adresse).
-Tillad? [j/n]"*. Et "j" gemmes pr. præcis URL i `~/.ekte/consent.yaml` —
-ændres URL'en (også bare porten), spørges der igen. Samtykket bor i din
-globale ekte-mappe, så en klonet projekt-config aldrig kan give sig selv lov.
+### 2. Generér — `/goal`
 
-Til headless/scriptet brug kan dialogen springes over med
-`EKTE_ALLOW_LOCAL_PROVIDER=1`.
+`/goal` er den autonome bygge-løkke (den simpleste agentic PIV: Plan→Implement→Validate).
+Den **kræver en godkendt plan**, så intentionen altid er eksternaliseret før der kodes.
 
-### Hooks og headless `-y goal`
+```
+/goal byg login-endpoint mod planen
+```
 
-I TUI'en kræver `run_hook` altid en bekræftelse pr. kald — også med `-y`. I
-headless `ekte -y goal "…"` auto-godkendes fil-skrivninger, men **hooks gates
-særskilt**: en hook fra et klonet, ubetroet repos `.ekte/config.yaml` kan ellers
-udføre vilkårlige shell-kommandoer uden interaktion (CWE-78/829).
+Hver iteration: agenten skriver/retter kode → kører dit `check_hook` (computationelt
+tjek) → og når det består, kører en **inferentiel Validate-fase**:
 
-Tillid bestemmes af **oprindelse**, ikke kommando-streng. En hook regnes som
-betroet — og auto-godkendes headless — hvis:
+- **Sikkerheds-sensor** — review for CWE/OWASP-risici.
+- **Intent-sensor** — en *separat, skeptisk* evaluator der afgør om ændringen faktisk
+  opfylder dine succeskriterier (ikke bare om den kompilerer).
 
-- de aktive hooks kommer fra din **globale** `~/.ekte/config.yaml` (din egen
-  maskine), dvs. projektet definerer ikke selv hooks. Definerer projektet egne
-  hooks, erstatter de de globale og regnes alle som lokale (ubetroede), eller
-- hookets kommando er **godkendt før** (godkender du et `run_hook` interaktivt i
-  TUI'en, gemmes kommandoen i `~/.ekte/consent.yaml`), eller
-- `EKTE_ALLOW_LOCAL_HOOKS=1` er sat (den eksplicitte opt-in til scriptet brug).
+Begge skal bestå. Underkender en sensor, fødes kritikken tilbage og løkken itererer;
+efter et par afvisninger stopper den og forelægger fundene for dig (backstop). Kan
+intentionen ikke afgøres, *spørger* den i stedet for at gætte.
 
-`EKTE_ALLOW_LOCAL_PROVIDER` åbner *ikke* for hooks — de to tilladelser er bevidst
-adskilt. Det per-kommando-samtykke i `consent.yaml` matcher på præcis kommando-
-streng: ændrer et repo kommandoen bag et betroet navn, kræves nyt samtykke.
+### 3. Verificér & accepter — du har sidste ord
 
-Samme gating gælder `goal.check_hook`, som ellers kører programmatisk i hver
-`/goal`-iteration uden per-kald-bekræftelse: er check-hookets kommando ikke
-betroet, nægter `/goal` at starte. Og `ekte springcheck` kører kun projektets
-eget `./mvnw` (et repo-leveret script) hvis `EKTE_ALLOW_LOCAL_HOOKS` er sat —
-ellers bruges system-`mvn`, så et klonet repo ikke kan eksekvere vilkårlig kode
-via wrapper-scriptet.
+Sensorerne **godkender ikke** — de anbefaler. Når begge består, forelægger løkken
+resultatet og beder om **din** accept (HITL). Først dér regnes målet som nået. Hvert
+udfald (godkendt, afvist, backstop, …) opsamles automatisk som en genbrugelig lektion
+(se [Wiki & hukommelse](#wiki--hukommelse)).
 
-> **Vær opmærksom:** At betro et build-baseret check_hook (fx `ekte springcheck`,
-> `mvn`, `gradle`, `npm`) betyder at betro projektets **build-logik**. Selv med
-> system-`mvn` eksekverer en `pom.xml` vilkårlig kode via Maven-plugins bundet
-> til `compile`/`run`-faserne — det samme gælder Gradle-tasks og npm-scripts.
-> Gatingen styrer *hvornår* det starter autonomt, men når hooket først er
-> betroet, kører projektets byggekode uden yderligere bekræftelse. Betro derfor
-> kun check_hooks i repos du faktisk stoler på.
+### Sensorerne uden for løkken
 
-Et projekt-lokalt hook arver **ikke** tillid ved at efterabe en global kommando-
-streng: netop fordi build-kommandoer kører repo-bestemt kode, ville `mvn compile`
-i et klonet repo være en helt anden risiko end det samme `mvn compile` i din
-globale config. Lokale hooks kræver derfor altid samtykke eller
-`EKTE_ALLOW_LOCAL_HOOKS`, uanset om en global hook har samme kommando.
+Du kan køre de samme sensorer ad hoc på dine ændringer:
+
+| Kommando | Hvad |
+|---|---|
+| `/verify` · `ekte verify` | Sensor-tjek af arbejdstræet: sikkerhed + intent-conformance |
+| `/review` · `ekte review` | Provider-agnostisk sikkerhedsreview (CWE/OWASP) af en git-diff |
+| `/orchestrate <opgave>` | Multi-agent: nedbryd opgave → subagenter løser → saml (Fase 1) |
+
+`ekte verify` og `ekte review` er CLI-subkommandoer (exit ≠ 0 ved fund) og egner sig
+til pre-push-hooks. Begge **redakterer hemmeligheder** før diffen sendes til provideren
+og fejler **lukket**.
 
 ---
 
 ## Konfiguration
 
-Konfigurationen ligger i `.ekte/config.yaml` i projektmappen. Filen oprettes automatisk ved onboarding, eller manuelt med `ekte init`.
-
-### Fuld konfigurationsreference
+Konfigurationen ligger i `.ekte/config.yaml` i projektmappen. Filen oprettes ved
+onboarding eller med `ekte init` / `/init`.
 
 ```yaml
-# LLM-provider: "anthropic" eller "openai" (bruges også til Ollama/LM Studio)
+# LLM-provider: "anthropic" eller "openai" (openai bruges også til Ollama/LM Studio)
 provider: anthropic
 model: claude-sonnet-4-6
-
-# Lokal model — udelad base_url for cloud-providers
-base_url: ""
+base_url: ""            # sæt for lokal model, fx http://localhost:11434/v1
 
 # Wiki — valgfrit
 wiki:
   enabled: true
   path: ~/.ekte/wiki
 
-# Whitelist — hvilke operationer ekte må udføre uden at spørge
-# Alt er forbudt som standard
+# Whitelist — alt er forbudt som standard
 whitelist:
-  git_worktree: true   # /spec opret/merge/fjern git worktrees
-  wiki_write:   true   # /wiki gem — skriv til wiki
-  hook_run:     true   # /hook <navn> — kør shell-kommandoer
+  file_read:     true
+  file_write:    true
+  hook_run:      true   # /hook <navn> + run_hook-tool
+  harness_write: true   # skriv harness-filer (memory, skills, ekte.md) — kræver bekræftelse
+  git_worktree:  true   # /spec opret/merge/fjern
+  wiki_write:    true   # /wiki gem
 
-# Hooks — navngivne shell-kommandoer der køres med /hook
+# Hooks — navngivne shell-kommandoer kørt med /hook eller af agenten via run_hook
 hooks:
-  test: go test ./...
-  lint: golangci-lint run
+  test:  go test ./...
   build: go build ./...
 
-# Ekstra rødder — valgfrit. Mapper uden for projektmappen hvor fil-tools
-# også må læse/skrive (absolutte stier; ~ ekspanderes). Uden denne er
-# alle stier låst til projektmappen. Bekræftelses-flowet gælder uændret.
+# Autonom /goal: tjek-hook + intent-rubrik
+goal:
+  check_hook: build      # computationelt succes-tjek pr. iteration
+  max_iterations: 10
+  # success_criteria sættes typisk automatisk ved /plan godkend
+  capture: true          # automatisk vidensopsamling fra /goal-udfald (default til)
+
+# Ekstra rødder — mapper uden for projektet hvor fil-tools også må læse/skrive
 extra_roots:
   - ~/projekter/playground
 ```
 
-> **OBS:** Tilladelser er `false` som standard. Uden whitelist-konfiguration vil `/spec`, `/wiki gem` og `/hook` blive blokeret med en forklarende fejlbesked.
+> **OBS:** Tilladelser er `false` som standard. Uden whitelist blokeres fil-, hook-,
+> wiki- og worktree-operationer med en forklarende besked.
+
+**API-nøgler gemmes aldrig i config** — kun i miljøvariabler (`ANTHROPIC_API_KEY` /
+`OPENAI_API_KEY`), så de ikke lækker via git-historik.
+
+**Lokale providers kræver samtykke:** peger `base_url` på en privat adresse, spørger
+ekte første gang og gemmer "ja" pr. præcis URL i `~/.ekte/consent.yaml`. Til scriptet
+brug: `EKTE_ALLOW_LOCAL_PROVIDER=1`.
 
 ---
 
-## Slash commands
+## Sikkerhedsmodel
 
-Alle kommandoer skrives direkte i input-feltet.
+ekte er bygget med en bevidst trusselsmodel. Kort fortalt:
+
+- **Fil-tools er sandkasse-låst** til projektmappen (+ evt. `extra_roots`); path
+  traversal og symlink-flugt afvises.
+- **Tillid bestemmes af oprindelse, ikke kommando-streng.** Et `run_hook` kræver altid
+  bekræftelse i TUI'en. Headless `ekte -y goal` auto-godkender fil-skrivninger, men en
+  hook fra et klonet, ubetroet repos `.ekte/config.yaml` gates særskilt — den regnes
+  kun som betroet hvis den kommer fra din **globale** `~/.ekte/config.yaml`, er
+  **godkendt før**, eller `EKTE_ALLOW_LOCAL_HOOKS=1` er sat (CWE-78/829).
+- **`goal.check_hook`** kører programmatisk hver iteration — er kommandoen ikke betroet,
+  nægter `/goal` at starte.
+- **Hemmeligheder redakteres** (best-effort) før diffs sendes til en provider; sikkerheds-
+  gates fejler **lukket**; ikke-betroet input afgrænses med tilfældige markører mod
+  prompt-injection.
+- **Persisteret kontekst bekræftes:** noter der senere loades som betroet kontekst
+  (`ekte.md`, memory, goal-lektioner) kræver din godkendelse før skrivning.
+
+> At betro et build-baseret check_hook (`mvn`, `gradle`, `npm`, `ekte springcheck`)
+> betyder at betro projektets **build-logik** — en `pom.xml` kører vilkårlig kode via
+> plugins. Gatingen styrer *hvornår* det starter autonomt; betro kun repos du stoler på.
+
+Kør `/security` for at se den aktuelle whitelist og guardrail-status.
+
+---
+
+## Kommandoreference
+
+Alle kommandoer skrives i input-feltet. `Tab` autocompleter (også 2. ord). Kontekst-
+afhængige kommandoer skjules når de ikke giver mening (fx `/verify` uden provider).
+
+**AIDD-flow**
 
 | Kommando | Beskrivelse |
 |---|---|
-| `/hjælp` | Vis liste over alle kommandoer |
-| `/init` | Opret `.ekte/config.yaml` + `ekte.md` i denne mappe (aktiverer fil-tools) |
-| `/skills [navn]` | Vis tilgængelige skills — angiv navn for at aktivere |
-| `/skills library` | Vis SKILLeton-biblioteket |
-| `/skills bundle <navn>` | Installér en skill-pakke (security/ci/aidd/...) |
-| `/skills show <nr\|navn>` | Læs en skill før install |
-| `/skills update <navn>` | Opdatér installeret skill (eller `--all`) |
-| `/skills install <navn>` | Installér en skill fra SKILLeton |
-| `/spec <navn>` | Opret en spec og tilhørende git worktree |
-| `/spec merge <navn>` | Merge worktree ind i main og ryd op |
-| `/spec remove <navn>` | Slet worktree uden merge |
-| `/plan <beskrivelse>` | Architect of Intent mode — kvalificér intent inden implementering |
-| `/plan godkend` / `vis` / `afvis` | Gem, vis eller forkast den aktuelle plan |
-| `/goal <beskrivelse>` | Autonom mål-loop: skriv kode → byg → gentag til succes (`/goal` alene viser opsætning) |
-| `ekte -y goal "<mål>"` | Kør mål-loopet headless uden TUI (kun i betroede repos) |
-| `/compress` | Komprimer kontekstvinduet — LLM laver et resumé af samtalen |
-| `/context` | Vis kontekstens lag med token-estimater |
-| `/wiki "spørgsmål"` | Søg i din personlige wiki |
-| `/wiki-get <url>` | Hent og ingest en webside i wikien |
-| `/wiki-gem <titel>` | Gem seneste `/forresten`-svar i wikien |
-| `/hook [navn]` | Vis tilgængelige hooks — angiv navn for at køre |
-| `/hook add <navn> <kommando>` | Tilføj et hook til config (uden at håndredigere YAML) |
-| `/hook fjern <navn>` | Fjern et hook fra config |
-| `/dep <modul>` | Sikkerhedsscore for én Go-afhængighed |
-| `/sec-check` | Scan alle afhængigheder i projektet + ekte-harness |
-| `/security` | Vis sikkerhedsstatus, whitelist og guardrails |
-| `/model` | Vis aktuel provider/model — `setup` starter wizard |
-| `/model ollama <url> <model>` | Skift til lokal Ollama/LM Studio |
-| `/mode beginner` / `expert` | Hints til/fra |
-| `/remember <tekst>` | Gem en note i hukommelsen (`.ekte/memory/`) |
-| `/observ [all\|html]` | Ydelses-statistik (tokens, tok/s, cache-hits) |
-| `/kø` | Vis prompt-køen — `slet <n>` / `ryd` administrerer den |
-| `/forresten <besked>` | Side-chat med en isoleret subagent (husker sin egen historik) |
-| `/navngiv <navn>` | Navngiv den aktuelle session |
-| `/sound on` / `off` | Lydpåmindelse til/fra |
-| `/clear` | Ryd samtalens historik |
-| `/resume [nummer]` | Vis eller indlæs tidligere sessioner |
-| `/exit` | Gem session og afslut |
+| `/plan <beskrivelse>` | Architect of Intent — kvalificér intent (ICE) inden implementering |
+| `/plan godkend` · `vis` · `afvis` | Gem (→ succeskriterier), vis eller forkast planen |
+| `/goal <beskrivelse>` | Autonom bygge-løkke med sensor-verifikation (kræver godkendt plan) |
+| `/verify` | Sensor-tjek af ændringer: sikkerhed + intent-conformance |
+| `/review` | Agnostisk sikkerhedsreview (CWE/OWASP) af ændringer |
+| `/orchestrate <opgave>` | Multi-agent: nedbryd → subagenter → saml |
 
-### Tastatur
+**Projekt & hooks**
 
-| Tast | Handling |
+| Kommando | Beskrivelse |
 |---|---|
-| `Enter` | Send besked |
-| `Shift+Enter` | Ny linje i input |
-| `Shift+Tab` | Skift arbejdsmode: plan ↔ develop |
-| `Tab` | Autocomplete af slash-kommandoer — også andet ord (`/mode beg…`, `/sound o…`, `/hook <navn>`) |
-| `↑` / `↓` | Naviger i inputhistorik |
-| `PgUp` / `PgDn` | Scroll i samtalevisning |
+| `/init` | Opret `.ekte/config.yaml` + `ekte.md` (aktiverer fil-tools) |
+| `/hook [navn]` | Vis hooks — angiv navn for at køre |
+| `/hook add <navn> <kommando>` · `fjern <navn>` | Administrér hooks uden at redigere YAML |
+| `/spec <navn>` · `merge` · `remove` | Spec + git worktree-arbejdsgang |
 
-### `/dep` og `/sec-check` — sikkerhedsscore
+**Skills, wiki & hukommelse**
 
-`/dep <modul>` tjekker ét modul mod Go module proxy og OSV.dev (CVE-database):
+| Kommando | Beskrivelse |
+|---|---|
+| `/skills [navn]` | Vis/aktivér skills |
+| `/skills library` · `bundle` · `show` · `install` · `update` | SKILLeton-biblioteket |
+| `/wiki "spørgsmål"` · `/wiki-get <url>` · `/wiki-gem <titel>` | Søg/ingest/gem i wikien |
+| `/forresten <besked>` | Side-chat med isoleret subagent |
+| `/remember <tekst>` | Gem en note i hukommelsen (`.ekte/memory/`) |
 
-```
-/dep github.com/gin-gonic/gin
-```
+**Sikkerhed, session & indstillinger**
 
-```
-Afhængighed:  github.com/gin-gonic/gin
-Version:      v1.10.0 (5 maj 2024)
-Score:        ★★★★★
-Kendte CVE:   0
+| Kommando | Beskrivelse |
+|---|---|
+| `/dep <modul>` · `/sec-check` | Sikkerhedsscore for én/alle Go-afhængigheder |
+| `/security` | Vis whitelist og guardrails |
+| `/context` · `/compress` · `/observ` | Kontekst-lag · komprimér · ydelses-statistik |
+| `/model` · `/mode beginner\|expert` · `/sound on\|off` | Provider/model · hints · lyd |
+| `/kø` · `/navngiv` · `/resume` · `/clear` · `/exit` | Kø · navngiv · genoptag · ryd · afslut |
 
-✓ Trygt at bruge
-```
-
-`/sec-check` scanner alle afhængigheder på én gang — både projektets `go.mod`
-og ekte-harness'ets egne moduler. Op til 8 tjek kører parallelt.
-
-```
-Projekt (3 moduler)
-
-✓ gin-gonic/gin v1.10.0
-✓ gorilla/mux v1.8.1
-⚠ some/old-lib v1.0.0 [1 CVE]
-  · GO-2023-1234: Remote code execution...
-
-3 rene · 0 sårbar · 0 fejl
-
-────────────────────────
-
-ekte-harness (25 moduler)
-
-✓ charmbracelet/bubbletea v1.3.10
-✓ charmbracelet/lipgloss v1.1.0
-...
-
-25 rene · 0 sårbar · 0 fejl
-```
+**Tastatur:** `Enter` send · `Shift+Enter` ny linje · `Shift+Tab` skift plan↔develop ·
+`Tab` autocomplete · `↑`/`↓` inputhistorik · `PgUp`/`PgDn` scroll.
 
 ---
 
-## Skills
+## Skills & SKILLeton
 
-En skill er en markdown-fil med YAML-frontmatter der tilføjer et system-prompt til næste besked.
-Læg dem i `.ekte/skills/` i projektmappen.
-
-### Eksempel: `.ekte/skills/tdd.md`
+En **skill** er en markdown-fil med YAML-frontmatter, der tilføjer et system-prompt
+(en *guide*) til arbejdet. Læg egne skills i `.ekte/skills/`:
 
 ```markdown
 ---
@@ -343,151 +320,138 @@ tags: [testing, go]
 ---
 
 ## System Prompt Addition
-
 Du hjælper med test-drevet udvikling. Skriv altid tests før implementering.
-Brug Go's standard `testing`-pakke. Forklar din tankegang kort.
 ```
 
-### Brug
+```
+/skills          # vis alle
+/skills tdd      # aktivér — gælder næste prompt
+```
+
+**SKILLeton** er det delte bibliotek af skills, du kan læse og installere fra:
 
 ```
-/skills          # vis alle skills
-/skills tdd      # aktiver — gælder for næste prompt
+/skills library         # se biblioteket (✓ = installeret)
+/skills show 3          # læs en skill før install (vises i sidepanelet)
+/skills install 1,3     # installér udvalgte
+/skills bundle security # installér en hel pakke (security/ci/aidd/...)
 ```
+
+Skills (*guides*) og sensorer (*harness-kode*) er bevidst adskilt: en skill former
+*hvordan* agenten arbejder; sensorerne *måler* resultatet.
 
 ---
 
-## Wiki
+## Wiki & hukommelse
 
-Wikien er et privat vidensbibliotek der deles på tværs af projekter.
-Den er baseret på [danskode/simple-wiki](https://github.com/danskode/simple-wiki).
-
-### Opsætning
-
-```bash
-ekte init   # følg guiden til wiki-opsætning
-```
-
-### Arbejdsflow
+**Wiki** — et privat vidensbibliotek der deles på tværs af projekter. Spørg via en
+isoleret subagent og fil gode svar tilbage:
 
 ```
-/forresten hvad er forskellen på mutex og rwmutex i Go?
-```
-
-ekte svarer via en isoleret subagent. Hvis svaret er nyttigt:
-
-```
-/wiki gem mutex-vs-rwmutex
-```
-
-Siden gemmes i din wiki og kan søges frem i fremtidige projekter:
-
-```
+/forresten forskellen på mutex og rwmutex i Go?
+/wiki-gem mutex-vs-rwmutex
 /wiki "trådsikkerhed i Go"
 ```
 
+**Hukommelse** — noter i `.ekte/memory/` (lokalt) og `~/.ekte/memory/` (globalt) loades
+som kontekst ved sessionsstart (saniteret mod injection). `/remember <tekst>` gemmer en
+note. Derudover opsamler harnesset automatisk viden fra `/goal`:
+
+- **Goal-journal** (`.ekte/memory/goals/journal.jsonl`) — en eval-case-klar, append-only
+  log over hvert terminalt `/goal`-udfald (mål, kriterier, sensor-verdikter, dit
+  ja/nej). Loades *ikke* i kontekst; den er telemetri der kan replayes senere.
+- **Goal-lektioner** (`.ekte/memory/goal-lessons.md`) — en kort destilleret lektion pr.
+  udfald, som du bekræfter før den promoveres til loadet hukommelse. Holdes til de
+  seneste ~15, så kontekst-budgettet ikke vokser ukontrolleret.
+
 ---
 
-## Mappestruktur
+## Afhængigheds-sikkerhed
 
-### Projektmappe (dit projekt)
+`/dep <modul>` scorer ét Go-modul mod Go module proxy og OSV.dev (CVE-database):
+
+```
+/dep github.com/gin-gonic/gin
+→ Version v1.10.0 · Score ★★★★★ · 0 kendte CVE · ✓ Trygt at bruge
+```
+
+`/sec-check` scanner alle afhængigheder på én gang — både projektets `go.mod` og
+ekte-harnessets egne moduler (op til 8 parallelle tjek), og rapporterer CVE'er pr. modul.
+
+---
+
+## CI/CD & udvikling
+
+ekte har en let, men reel pipeline. Status pr. nu:
+
+**CI — `.github/workflows/ci.yml`** ✅ *på plads*
+- Kører på **hver push og pull request**.
+- `go vet ./...` + `go test -race ./...` på `ubuntu-latest`, Go-version fra `go.mod`.
+- Actions er **SHA-pinnede**; Dependabot holder dem opdaterede (`.github/dependabot` + PR'er).
+
+**Release — `.github/workflows/release.yml`** ✅ *på plads*
+- Trigges af **`v*`-tags** (fx `git tag v0.3.0 && git push --tags`).
+- **goreleaser** (`.goreleaser.yaml`) bygger cross-platform binærer og publicerer en
+  GitHub Release. ekte er en CLI, så "CD" = release-artefakter, ikke server-deploy.
+
+**Maintainer-side gate** (ikke en del af CI)
+- En lokal **pre-push hook** (`scripts/pre-push.sh` + `security-review.sh`) kører et
+  LLM-baseret sikkerhedsreview af upushede commits og blokerer ved medium+ fund. Det er
+  *ikke-deterministisk* og bevidst adskilt fra den agnostiske `ekte verify`/`ekte review`.
+
+**Udestående / mulige forbedringer**
+- CI kører kun `go vet` — ingen `golangci-lint`-trin endnu (kan køres lokalt via hook).
+- Ingen coverage-gate; releases tagges manuelt.
+
+**Lokal udvikling**
+
+```bash
+go build ./...           # byg alt
+go vet ./... && go test ./...   # samme tjek som CI (tilføj -race for fuld paritet)
+go install ./cmd/ekte    # installér din lokale build
+```
+
+---
+
+## Projektstruktur & arkitektur
+
+**Projektmappe (dit projekt):**
 
 ```
 dit-projekt/
-├── ekte.md                    # projektbeskrivelse og kontekst til LLM
-│
-└── .ekte/                     # ekte's arbejdsmappe (gitignored)
-    ├── config.yaml            # provider, whitelist, hooks, wiki
-    ├── skills/                # egne skills til dette projekt
-    │   └── min-skill.md
-    ├── sessions/              # gemte samtaler (max 3, ældste slettes)
-    │   └── 2026-05-07-...json
-    ├── worktrees/             # git worktrees til specs (auto-styret)
-    │   └── min-feature/
-    └── wiki/ -> ~/.ekte/wiki  # symlink til global wiki (valgfrit)
+├── ekte.md                    # projektbeskrivelse + kontekst til LLM (+ goal-byggeresumé)
+└── .ekte/                     # ekte's arbejdsmappe (bør gitignores)
+    ├── config.yaml            # provider, whitelist, hooks, goal, wiki
+    ├── skills/                # egne skills
+    ├── memory/                # noter loadet som kontekst
+    │   ├── goal-lessons.md    # destillerede /goal-lektioner (bekræftede)
+    │   └── goals/journal.jsonl# eval-case-klar udfaldslog (loades ikke)
+    ├── plans/                 # godkendte /plan-artefakter
+    ├── sessions/              # gemte samtaler (max 3)
+    └── worktrees/             # git worktrees til specs
 ```
 
-### ekte-repo (kildekode)
+**Kildekode (udvalgte pakker):**
 
 ```
 ekte/
-├── cmd/
-│   └── ekte/
-│       └── main.go            # entrypoint: onboarding → agent → TUI
-│
+├── cmd/ekte/main.go          # entrypoint: onboarding → agent → TUI; subkommandoer (init, review, verify, ...)
 ├── internal/
-│   ├── agent/
-│   │   ├── agent.go           # kerne: ProcessStream(input) → <-chan Event, tool-loop
-│   │   ├── slash.go           # alle slash-kommando-handlers
-│   │   ├── sanitize.go        # injection-/ANSI-sanitering og tool-visning
-│   │   ├── plan.go            # /plan — Architect of Intent-flow
-│   │   ├── wizard.go          # /model-wizard og URL-validering
-│   │   └── hooks.go           # hook-kørsel inkl. container-isolation
-│   ├── consent/
-│   │   └── consent.go         # persistent samtykke til lokale provider-URL'er
-│   ├── container/
-│   │   └── container.go       # isolerede hook-containere (docker/podman)
-│   ├── dep/
-│   │   └── dep.go             # sikkerhedsscore via proxy.golang.org + osv.dev
-│   ├── ektelog/
-│   │   └── ektelog.go         # struktureret logging til sessionsfiler
-│   ├── git/
-│   │   └── worktree.go        # Create, List, Merge, Remove worktrees
-│   ├── obs/
-│   │   └── obs.go             # observability: per-tur statistik → /observ
-│   ├── onboarding/
-│   │   └── onboarding.go      # første-kørsel guide
-│   ├── provider/
-│   │   ├── config.go          # Config, WhitelistConfig, LoadConfig
-│   │   ├── provider.go        # Provider-interface
-│   │   ├── anthropic.go       # Anthropic-implementering
-│   │   └── openai.go          # OpenAI/Ollama-implementering
-│   ├── session/
-│   │   └── session.go         # gem og indlæs samtaler som JSON
-│   ├── skill/
-│   │   ├── skill.go           # parser markdown-skills med YAML-frontmatter
-│   │   └── library.go         # SKILLeton-bibliotek: /skills library + install/bundle
-│   ├── tools/
-│   │   ├── tools.go           # LLM-tools: read/write/edit/search med sandkasse
-│   │   └── fetch.go           # /wiki-get URL-hentning med SSRF-værn
-│   ├── tui/
-│   │   ├── model.go           # Bubbletea Model — præsentationslag
-│   │   ├── update.go          # tastaturhåndtering og event-rendering
-│   │   └── styles.go          # lipgloss-stilarter
-│   └── wiki/
-│       ├── wiki.go            # Query, SavePage, grepSearch
-│       └── init.go            # wiki-opsætning ved onboarding
-│
-├── specs/                     # feature-specs (én per feature — driver worktree-workflow)
-├── go.mod
-└── README.md
+│   ├── agent/                # kerne: ProcessStream → <-chan Event, slash-handlers,
+│   │                         #   /plan, /goal-loop (streamGoal), hooks, goaljournal
+│   ├── sensor/               # inferentielle sensorer: SecuritySensor + skeptisk IntentSensor
+│   ├── review/               # provider-agnostisk sikkerhedsreview (CWE/OWASP)
+│   ├── journal/              # append-only, eval-case-klar /goal-udfaldslog
+│   ├── orchestrator/         # multi-agent: nedbryd → subagenter → scor → saml
+│   ├── provider/             # Provider-interface: anthropic, openai, lmstudio
+│   ├── skill/                # markdown-skills + SKILLeton-bibliotek
+│   ├── wiki/                 # query, gem, ingest (sandkasse + SSRF-værn)
+│   ├── secret/ · consent/ · netsafe/ · container/   # sikkerheds-primitiver
+│   └── tui/                  # Bubbletea-præsentationslag (ingen logik)
+└── .github/workflows/        # ci.yml, release.yml
 ```
 
-### Arkitektur
-
-```
-┌──────────────────────────────────────────────┐
-│  cmd/ekte/main.go                            │
-│  Samler config → agent → TUI                 │
-└────────────────┬─────────────────────────────┘
-                 │
-    ┌────────────▼────────────┐
-    │  internal/agent         │
-    │  ProcessStream(input)   │  ← al logik: slash, LLM, hooks, dep
-    │       → <-chan Event    │
-    └──┬───────┬──────┬───────┘
-       │       │      │
-  Provider   Wiki   Git/Skills/Session/Dep
-  (OpenAI/   (søg   (worktrees, skills,
-  Anthropic)  gem)   sessioner, CVE-tjek)
-       │
-    ┌──▼──────────────────────┐
-    │  internal/tui           │
-    │  Modtager Events        │  ← ren præsentation, ingen logik
-    │  Renderer til terminal  │
-    └─────────────────────────┘
-```
-
-TUI'en er et tyndt præsentationslag — al logik lever i `internal/agent`.
-Det gør det muligt at bygge alternative frontends (GUI, LSP, web) ved kun
-at tilføje et nyt `cmd/`-entrypoint der importerer `internal/agent`.
+**Lagdeling:** al logik lever i `internal/agent`, der eksponerer
+`ProcessStream(input) → <-chan Event`. TUI'en er et tyndt præsentationslag der kun
+renderer events. Det gør det muligt at bygge alternative frontends (GUI, web, LSP) ved
+at tilføje et nyt `cmd/`-entrypoint, der importerer `internal/agent`.
