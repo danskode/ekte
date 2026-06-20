@@ -68,6 +68,12 @@ type ContainerConfig struct {
 type GoalConfig struct {
 	CheckHook     string `yaml:"check_hook"`     // navn på hook der bruges som succes-tjek
 	MaxIterations int    `yaml:"max_iterations"` // default 10
+	// SuccessCriteria er Expectations fra /plan (ICE) — rubrikken den inferentielle
+	// IntentSensor måler mod i sensor-loopet. Sættes typisk in-memory ved /plan godkend.
+	SuccessCriteria []string `yaml:"success_criteria"`
+	// Capture styrer automatisk vidensopsamling fra terminale /goal-udfald.
+	// nil = default til (når harness_write er slået til); sæt false for at slå fra.
+	Capture *bool `yaml:"capture"`
 }
 
 type Config struct {

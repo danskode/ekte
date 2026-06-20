@@ -18,6 +18,7 @@ import (
 	"github.com/danskode/ekte/internal/provider"
 	"github.com/danskode/ekte/internal/review"
 	"github.com/danskode/ekte/internal/secret"
+	"github.com/danskode/ekte/internal/sensor"
 	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/tools"
@@ -55,6 +56,9 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 
 	case "/review":
 		return a.handleReview(ctx)
+
+	case "/verify":
+		return a.handleVerify(ctx)
 
 	case "/orchestrate":
 		return a.handleOrchestrate(ctx, arg)
@@ -466,6 +470,54 @@ func (a *Agent) handleReview(ctx context.Context) []Event {
 		content = fmt.Sprintf("(%d potentielle secret(s) redakteret — best-effort, ikke en garanti)\n\n", redacted) + content
 	}
 	return []Event{{Type: EventSystem, Content: content}}
+}
+
+// buildSensors samler den inferentielle sensor-pakke (sikkerhed + intent) for
+// den valgte provider. Genbruges af /verify og sensor-loopet. Intent-evaluatoren
+// kører på samme provider som implementeren i MVP (provider-per-rolle er Fase 2).
+func (a *Agent) buildSensors() []sensor.Sensor {
+	return []sensor.Sensor{
+		sensor.SecuritySensor{P: a.cfg.Provider},
+		sensor.IntentSensor{P: a.cfg.Provider},
+	}
+}
+
+// handleVerify kører sensorerne ad hoc på arbejdstræets ændringer — sikkerhed +
+// intent-conformance mod de opstillede Expectations (fra /plan). Samme byggesten
+// som sensor-loopet, men uden for /goal.
+func (a *Agent) handleVerify(ctx context.Context) []Event {
+	if a.cfg.Provider == nil {
+		return []Event{{Type: EventError, Content: "Ingen provider konfigureret."}}
+	}
+	dir := a.cfg.RepoRoot
+	if dir == "" {
+		dir = a.cfg.WorkDir
+	}
+	out, gerr := exec.Command("git", "-C", dir, "diff", "HEAD").Output()
+	if gerr != nil {
+		return []Event{{Type: EventError, Content: "Kunne ikke køre git diff: " + gerr.Error()}}
+	}
+	diff := string(out)
+	if strings.TrimSpace(diff) == "" {
+		return []Event{{Type: EventSystem, Content: "Ingen ændringer at verificere (arbejdstræ rent)."}}
+	}
+	in := sensor.Input{Criteria: a.cfg.Goal.SuccessCriteria, Diff: diff}
+	verdicts, err := sensor.RunAll(ctx, a.buildSensors(), in)
+	if err != nil {
+		return []Event{{Type: EventSystem, Content: "Verifikation kunne ikke gennemføres: " + err.Error()}}
+	}
+	sum := sensor.Aggregate(verdicts)
+	header := "✓ Verifikation: BESTÅET"
+	switch {
+	case sum.NeedsClarification:
+		header = "? Verifikation: AFKLARING NØDVENDIG"
+	case !sum.Pass:
+		header = "✗ Verifikation: BLOKERET (" + strings.ToUpper(sum.WorstSeverity) + ")"
+	}
+	if len(a.cfg.Goal.SuccessCriteria) == 0 {
+		header += "\n(Ingen succeskriterier opstillet — kør /plan for at få intent-conformance vurderet.)"
+	}
+	return []Event{{Type: EventSystem, Content: header + "\n\n" + sensor.Format(verdicts)}}
 }
 
 func (a *Agent) handleSkillsLibrary() []Event {
@@ -1165,6 +1217,7 @@ var builtinCommands = [][2]string{
 	{"/skills install", "installér skill(s) — fx 'install 1,3'"},
 	{"/skills update", "opdatér skill(s) til nyeste (--all)"},
 	{"/review", "agnostisk sikkerhedsreview af ændringer (valgt LLM)"},
+	{"/verify", "sensor-tjek af ændringer: sikkerhed + intent-conformance"},
 	{"/orchestrate <opgave>", "multi-agent: nedbryd → subagenter → saml (Fase 1)"},
 	{"/spec <navn>", "opret spec + git worktree"},
 	{"/compress", "komprimer kontekstvindue"},
@@ -1230,7 +1283,7 @@ func (a *Agent) commandAvailable(cmd string) bool {
 		return a.cfg.Wiki != nil // wiki sættes op via 'ekte init'
 	case cmd == "/hook [navn]" || strings.HasPrefix(cmd, "/hook fjern"):
 		return len(a.cfg.Hooks) > 0 // '/hook add' forbliver tilgængelig
-	case cmd == "/review" || strings.HasPrefix(cmd, "/orchestrate") || strings.HasPrefix(cmd, "/goal"):
+	case cmd == "/review" || cmd == "/verify" || strings.HasPrefix(cmd, "/orchestrate") || strings.HasPrefix(cmd, "/goal"):
 		return a.cfg.Provider != nil
 	case cmd == "/plan godkend" || cmd == "/plan vis" || cmd == "/plan afvis":
 		return a.planMode

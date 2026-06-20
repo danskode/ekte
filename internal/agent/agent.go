@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -18,8 +19,10 @@ import (
 
 	"github.com/danskode/ekte/internal/ektelog"
 	"github.com/danskode/ekte/internal/git"
+	"github.com/danskode/ekte/internal/journal"
 	"github.com/danskode/ekte/internal/obs"
 	"github.com/danskode/ekte/internal/provider"
+	"github.com/danskode/ekte/internal/sensor"
 	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/tools"
@@ -1830,6 +1833,15 @@ func (a *Agent) streamGoal(ctx context.Context, goalDesc string, ch chan<- Event
 		ch <- Event{Type: EventSystem, Content: "Brug: /goal <beskrivelse af målet>"}
 		return
 	}
+	// Entry-gate (AIDD-disciplin): et autonomt loop kræver en kvalificeret intention.
+	// Uden Expectations (succeskriterier fra en godkendt /plan) har den inferentielle
+	// Validate-fase intet at måle mod, og loopet ville degenerere til "bygger koden?".
+	if len(a.cfg.Goal.SuccessCriteria) == 0 {
+		ch <- Event{Type: EventSystem, Content: "⛔ /goal kræver en kvalificeret intention først.\n\n" +
+			"Kør /plan <beskrivelse> → kvalificér Expectations (ICE) → /plan godkend.\n" +
+			"Så måler det autonome loop mod dine succeskriterier (intent + sikkerhed) — ikke kun om koden bygger."}
+		return
+	}
 	cfg := a.cfg.Goal
 	if cfg.CheckHook == "" {
 		ch <- Event{Type: EventSystem, Content: "⛔ goal.check_hook er ikke konfigureret.\n\nTilføj til .ekte/config.yaml:\n\n  goal:\n    check_hook: compile\n    max_iterations: 10"}
@@ -1872,6 +1884,13 @@ func (a *Agent) streamGoal(ctx context.Context, goalDesc string, ch chan<- Event
 	defer func() { a.cfg.Whitelist.AutoApprove = savedAutoApprove }()
 
 	var lastCheckOutput string
+	var lastVerdicts []sensor.Verdict // seneste sensor-verdikter — journalføres ved udfald
+	// Backstop (deny-and-continue): den inferentielle evaluator fødes kritik tilbage
+	// og itererer, men en svag model kan underkende i det uendelige. Efter dette antal
+	// konsekutive inferentielle afvisninger stopper loopet og forelægger fundene for
+	// mennesket (terminal HITL) frem for at brænde hele iterations-budgettet.
+	const maxEvaluatorRejections = 3
+	evaluatorRejections := 0
 
 	for i := 0; i < maxIter; i++ {
 		if ctx.Err() != nil {
@@ -1921,23 +1940,117 @@ func (a *Agent) streamGoal(ctx context.Context, goalDesc string, ch chan<- Event
 			}
 		}
 
-		if success {
-			msg := fmt.Sprintf("✓ Mål nået efter %d iteration(er).", i+1)
-			// springcheck (og lignende hooks) printer projektets adresse —
-			// løft den op i succesbeskeden så brugeren ser hvor appen kører.
-			if url := firstURL(lastCheckOutput); url != "" {
-				msg += "\n🌐 Projektet kan tilgås på: " + url
+		if !success {
+			continue // computationelt check fejlede — fød output tilbage og iterér
+		}
+
+		// Computationelt bestået. Kør den inferentielle Validate-fase (sikkerhed +
+		// intent-conformance) inden "Mål nået" erklæres — kode kan bygge og stadig
+		// være usikker eller ikke opfylde intentionen.
+		if a.cfg.Provider != nil {
+			ch <- Event{Type: EventSystem, Content: "Computationelt check bestået — verificerer intent + sikkerhed..."}
+			diff := a.workspaceDiff()
+			verdicts, serr := sensor.RunAll(ctx, a.buildSensors(), sensor.Input{
+				Goal:        goalDesc,
+				Criteria:    a.cfg.Goal.SuccessCriteria,
+				Diff:        diff,
+				CheckOutput: lastCheckOutput,
+			})
+			if serr != nil {
+				// Fejl-luk: kan ikke verificeres → stop og overlad til mennesket.
+				ch <- Event{Type: EventSystem, Content: "⛔ Kunne ikke gennemføre verifikationen: " + serr.Error() + "\nLoopet stoppet — vurdér ændringerne manuelt (/verify når provideren er tilbage)."}
+				a.recordGoal(ctx, ch, goalDesc, journal.OutcomeVerifyError, "", i+1, verdicts)
+				return
 			}
-			ch <- Event{Type: EventSystem, Content: msg}
-			// Persistér byggeforståelsen i ekte.md — uden den glemmer modellen
-			// alt mellem sessioner og må genlæse kodebasen forfra ved hver
-			// videreudvikling/fejlretning.
-			a.persistGoalSummary(ctx, goalDesc, ch)
+			lastVerdicts = verdicts
+			ch <- Event{Type: EventToolOutput, Content: sensor.Format(verdicts)}
+			sum := sensor.Aggregate(verdicts)
+
+			if sum.NeedsClarification {
+				// Intent kan ikke afgøres (Austin: misfire) — spørg mennesket frem
+				// for et tavst pass. Terminal HITL: stop og afvent præcisering.
+				ch <- Event{Type: EventSystem, Content: "❓ Afklaring nødvendig før målet kan erklæres nået:\n  " + sum.ClarifyQuestion + "\n\nPræcisér intentionen (fx via /plan) og kør /goal igen."}
+				a.recordGoal(ctx, ch, goalDesc, journal.OutcomeClarify, "", i+1, verdicts)
+				return
+			}
+			if !sum.Pass {
+				evaluatorRejections++
+				if evaluatorRejections >= maxEvaluatorRejections {
+					ch <- Event{Type: EventSystem, Content: fmt.Sprintf(
+						"🛑 Verifikationen underkendte ændringen %d gange i træk (backstop nået).\nLoopet stoppet og forelagt dig frem for at iterere videre. Udestående:\n\n%s\n\nVurdér selv, justér planen, eller kør /goal igen.",
+						evaluatorRejections, sensor.Format(verdicts))}
+					a.recordGoal(ctx, ch, goalDesc, journal.OutcomeBackstop, "", i+1, verdicts)
+					return
+				}
+				// Fød kritikken tilbage som næste iterations udgangspunkt.
+				lastCheckOutput = "Koden bygger, men verifikationen underkendte ændringen. Ret følgende før målet er nået:\n" + sensor.Format(verdicts)
+				ch <- Event{Type: EventSystem, Content: fmt.Sprintf("↻ Verifikation underkendt (%d/%d) — fører kritik tilbage og itererer.", evaluatorRejections, maxEvaluatorRejections)}
+				continue
+			}
+			evaluatorRejections = 0 // bestået — nulstil backstop-tælleren
+		}
+
+		// Begge sensor-akser bestået (eller ingen provider). Sensorerne GODKENDER
+		// ikke — de anbefaler. Den terminale accept er menneskets (HITL niveau 2):
+		// forelæg verdikterne og bed om bekræftelse, før målet erklæres nået.
+		// I headless besvares dette programmatisk (-y godkender, ellers afvises).
+		confirmCh := make(chan ConfirmResponse, 1)
+		ch <- Event{
+			Type:      EventToolConfirm,
+			Content:   "Sensorerne vurderer målet som nået (intent + sikkerhed). Godkender du? (j/n — Tab for at tilføje en rettelse)",
+			ConfirmCh: confirmCh,
+		}
+		var resp ConfirmResponse
+		select {
+		case <-ctx.Done():
+			return
+		case resp = <-confirmCh:
+		}
+		if !resp.Approved {
+			if strings.TrimSpace(resp.Redirect) != "" {
+				// Mennesket overtrumfer sensorernes "ser nået ud" med en konkret rettelse.
+				lastCheckOutput = "Du afviste at målet er nået. Ret følgende før det tæller som løst:\n" + resp.Redirect
+				ch <- Event{Type: EventSystem, Content: "↻ Ikke godkendt — fører din rettelse tilbage og itererer."}
+				continue
+			}
+			ch <- Event{Type: EventSystem, Content: "Ikke godkendt. Loopet stoppet — du har kontrollen. Kør /goal igen eller fortsæt manuelt."}
+			// Menneske afviste trods grønne sensorer — højeste signal til judge-kalibrering.
+			a.recordGoal(ctx, ch, goalDesc, journal.OutcomeRejected, journal.LabelRejectedDespitePass, i+1, lastVerdicts)
 			return
 		}
+
+		// "✓ Mål nået" bevares ordret — headless-loopet detekterer succes på den.
+		msg := fmt.Sprintf("✓ Mål nået og godkendt efter %d iteration(er) — computationelt + inferentielt verificeret, accepteret af dig.", i+1)
+		// springcheck (og lignende hooks) printer projektets adresse —
+		// løft den op i succesbeskeden så brugeren ser hvor appen kører.
+		if url := firstURL(lastCheckOutput); url != "" {
+			msg += "\n🌐 Projektet kan tilgås på: " + url
+		}
+		ch <- Event{Type: EventSystem, Content: msg}
+		// Persistér byggeforståelsen i ekte.md — uden den glemmer modellen
+		// alt mellem sessioner og må genlæse kodebasen forfra ved hver
+		// videreudvikling/fejlretning.
+		a.persistGoalSummary(ctx, goalDesc, ch)
+		a.recordGoal(ctx, ch, goalDesc, journal.OutcomeAccepted, journal.LabelAccepted, i+1, lastVerdicts)
+		return
 	}
 
 	ch <- Event{Type: EventSystem, Content: fmt.Sprintf(
 		"✗ Mål ikke nået efter %d iterationer.\n\nPrøv at øge goal.max_iterations eller reformulér målet.", maxIter,
 	)}
+	a.recordGoal(ctx, ch, goalDesc, journal.OutcomeMaxIter, "", maxIter, lastVerdicts)
+}
+
+// workspaceDiff returnerer arbejdstræets ændringer mod HEAD — samme diff-kilde som
+// /review og /verify. Tom streng ved git-fejl eller rent træ.
+func (a *Agent) workspaceDiff() string {
+	dir := a.cfg.RepoRoot
+	if dir == "" {
+		dir = a.cfg.WorkDir
+	}
+	out, err := exec.Command("git", "-C", dir, "diff", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
 }

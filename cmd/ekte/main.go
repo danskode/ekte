@@ -23,6 +23,7 @@ import (
 	"github.com/danskode/ekte/internal/provider"
 	"github.com/danskode/ekte/internal/review"
 	"github.com/danskode/ekte/internal/secret"
+	"github.com/danskode/ekte/internal/sensor"
 	"github.com/danskode/ekte/internal/session"
 	"github.com/danskode/ekte/internal/skill"
 	"github.com/danskode/ekte/internal/springcheck"
@@ -43,6 +44,10 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "review" {
 		runReview()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "verify" {
+		runVerify()
 		return
 	}
 	autoApprove := false
@@ -1027,6 +1032,73 @@ func runReview() {
 	}
 	fmt.Println(review.Format(res))
 	if res.Blocking() {
+		os.Exit(1)
+	}
+}
+
+// runVerify kører sensor-pakken (sikkerhed + intent-conformance) på git-diffen via
+// den valgte provider — samme byggesten som /goal-loopets Validate-fase, eksponeret
+// til pre-push og ad hoc-brug. Exit: 0 bestået · 1 blokeret · 2 afklaring/uafgjort.
+func runVerify() {
+	cwd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
+	localCfg, _ := provider.LoadConfig(filepath.Join(cwd, ".ekte", "config.yaml"))
+	globalCfg, _ := provider.LoadConfig(filepath.Join(home, ".ekte", "config.yaml"))
+	cfg := provider.MergeConfigs(globalCfg, localCfg)
+	if cfg == nil {
+		fmt.Fprintln(os.Stderr, "ekte verify: ingen config fundet (.ekte/config.yaml). Kør 'ekte init'.")
+		os.Exit(2)
+	}
+	globalDir := filepath.Join(home, ".ekte")
+	if consent.IsPrivateURL(cfg.BaseURL) {
+		if consent.EnvOverride() || consent.Granted(globalDir, cfg.BaseURL) {
+			cfg.AllowLocal = true
+		} else {
+			fmt.Fprintln(os.Stderr, "ekte verify: lokal provider kræver samtykke. Start ekte normalt én gang og godkend, eller sæt EKTE_ALLOW_LOCAL_PROVIDER=1.")
+			os.Exit(2)
+		}
+	}
+	p, err := provider.NewFromConfig(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ekte verify: kunne ikke oprette provider:", err)
+		os.Exit(2)
+	}
+	diff, _, derr := gitDiffForReview(cwd)
+	if derr != nil {
+		fmt.Fprintln(os.Stderr, "ekte verify: kunne ikke hente git-diff:", derr)
+		os.Exit(2)
+	}
+	if strings.TrimSpace(diff) == "" {
+		fmt.Println("Ingen ændringer at verificere.")
+		return
+	}
+	if !consent.IsPrivateURL(cfg.BaseURL) {
+		fmt.Fprintln(os.Stderr, "ekte verify: diffen sendes til en ekstern provider (kun redakteret indhold).")
+	}
+	if len(cfg.Goal.SuccessCriteria) == 0 {
+		fmt.Fprintln(os.Stderr, "ekte verify: ingen succeskriterier i config (goal.success_criteria) — intent-conformance kan ikke vurderes (kun sikkerhed).")
+	}
+
+	sensors := []sensor.Sensor{
+		sensor.SecuritySensor{P: p},
+		sensor.IntentSensor{P: p},
+	}
+	verdicts, err := sensor.RunAll(context.Background(), sensors, sensor.Input{
+		Criteria: cfg.Goal.SuccessCriteria,
+		Diff:     diff,
+	})
+	if err != nil {
+		// Fail-CLOSED (CWE-636): kan en sensor ikke nå sin provider, er det ikke grønt lys.
+		fmt.Fprintln(os.Stderr, "ekte verify: kunne ikke gennemføre:", err)
+		os.Exit(2)
+	}
+	fmt.Println(sensor.Format(verdicts))
+	sum := sensor.Aggregate(verdicts)
+	switch {
+	case sum.NeedsClarification:
+		fmt.Fprintln(os.Stderr, "Afklaring nødvendig — intentionen kan ikke vurderes uden præcisering.")
+		os.Exit(2)
+	case !sum.Pass:
 		os.Exit(1)
 	}
 }

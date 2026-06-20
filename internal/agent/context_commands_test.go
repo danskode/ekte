@@ -22,6 +22,9 @@ func TestCommandAvailable(t *testing.T) {
 	if a.commandAvailable("/review") {
 		t.Error("/review bør være skjult uden provider")
 	}
+	if a.commandAvailable("/verify") {
+		t.Error("/verify bør være skjult uden provider")
+	}
 	if a.commandAvailable("/plan godkend") {
 		t.Error("/plan godkend bør kun vises i plan mode")
 	}

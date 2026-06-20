@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -95,6 +96,19 @@ func (a *Agent) handlePlanGodkend(ctx context.Context, ch chan<- Event) {
 		return
 	}
 
+	// Destillér Expectations (ICE) til en maskinverificerbar rubrik — den tråd
+	// der binder Definition (intent) til Verification (IntentSensor i sensor-loopet).
+	criteria := a.extractSuccessCriteria(ctx, planContent)
+	a.cfg.Goal.SuccessCriteria = criteria
+	if len(criteria) > 0 {
+		var b strings.Builder
+		b.WriteString("\n\n## Succeskriterier (IntentSensor-rubrik)\n\n")
+		for _, c := range criteria {
+			b.WriteString("- " + c + "\n")
+		}
+		planContent += b.String()
+	}
+
 	planPath, err := a.savePlanFile(planContent)
 	if err != nil {
 		ch <- Event{Type: EventError, Content: "Fejl ved gem af plan: " + err.Error()}
@@ -106,6 +120,11 @@ func (a *Agent) handlePlanGodkend(ctx context.Context, ch chan<- Event) {
 		Content: "[Plan godkendt — implementering kan starte]\n" + planContent,
 	})
 	ch <- Event{Type: EventSystem, Content: fmt.Sprintf("✓ Plan godkendt og gemt: %s\nPlan mode afsluttet — implementering kan starte.", planPath)}
+	if len(criteria) > 0 {
+		ch <- Event{Type: EventSystem, Content: fmt.Sprintf("🎯 %d succeskriterie(r) udtrukket som intent-rubrik — /goal og /verify måler imod dem.", len(criteria))}
+	} else {
+		ch <- Event{Type: EventSystem, Content: "⚠ Ingen klare succeskriterier kunne udtrækkes af planen — /goal vil bede om en præcisering. Kvalificér Expectations tydeligere i /plan."}
+	}
 	// Hjælp brugeren videre til udførelsesfasen — og opdag hvis der mangler et
 	// goal/check_hook, så man ikke står stranded efter godkendelsen.
 	if a.cfg.Goal.CheckHook != "" {
@@ -119,6 +138,44 @@ func (a *Agent) handlePlanGodkend(ctx context.Context, ch chan<- Event) {
 		"  /hook add compile mvn -q compile     (eller: go build ./..., npm run build)\n" +
 		"  /hook add goalcheck ekte springcheck (Java + Thymeleaf: tjekker sider/endpoints)\n" +
 		"Tilføj så goal.check_hook i .ekte/config.yaml. Eller beskriv bare næste skridt, så bygger vi manuelt."}
+}
+
+// extractSuccessCriteria destillerer Expectations fra plan-samtalen til en kort
+// liste konkrete, verificerbare succeskriterier — rubrikken IntentSensor måler
+// diffen mod i sensor-loopet. Best-effort: fejler kaldet eller parse, returneres
+// nil, og /goal vil bede om en præcisering frem for at gætte.
+func (a *Agent) extractSuccessCriteria(ctx context.Context, planContent string) []string {
+	if a.cfg.Provider == nil {
+		return nil
+	}
+	const sys = `Du destillerer en plan til en kort liste KONKRETE, VERIFICERBARE succeskriterier (Expectations fra ICE). Hvert kriterium er en testbar tilstand der skal være sand for at opgaven tæller som løst — IKKE implementeringstrin eller hvordan. Returnér KUN valid JSON uden markdown: {"criteria": ["...", "..."]}. Maks 8 kriterier. Kan du ikke udlede klare kriterier, returnér {"criteria": []}.`
+	resp, err := a.cfg.Provider.Chat(ctx, []provider.Message{
+		{Role: "system", Content: sys},
+		{Role: "user", Content: planContent},
+	})
+	if err != nil {
+		return nil
+	}
+	clean := strings.TrimSpace(resp.Content)
+	clean = strings.TrimPrefix(clean, "```json")
+	clean = strings.TrimPrefix(clean, "```")
+	clean = strings.TrimSuffix(clean, "```")
+	var out struct {
+		Criteria []string `json:"criteria"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(clean)), &out) != nil {
+		return nil
+	}
+	var crit []string
+	for _, c := range out.Criteria {
+		if c = strings.TrimSpace(c); c != "" {
+			crit = append(crit, c)
+		}
+		if len(crit) >= 8 {
+			break
+		}
+	}
+	return crit
 }
 
 func (a *Agent) handlePlan(ctx context.Context, arg string) []Event {

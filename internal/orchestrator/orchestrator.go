@@ -65,12 +65,22 @@ func (o Options) withDefaults() Options {
 
 type Orchestrator struct {
 	p        provider.Provider
+	eval     provider.Provider // evaluator-model — adskilt rolle mod self-evaluation bias
 	opts     Options
 	progress func(string)
 }
 
 func New(p provider.Provider, opts Options, progress func(string)) *Orchestrator {
-	return &Orchestrator{p: p, opts: opts.withDefaults(), progress: progress}
+	return &Orchestrator{p: p, eval: p, opts: opts.withDefaults(), progress: progress}
+}
+
+// SetEvaluator sætter en separat provider til scoring. Bruges til ægte
+// provider-per-rolle (fx en stærkere/anden model som skeptisk evaluator), så
+// bedømmelsen ikke laves af samme model der skrev løsningen. Nil ignoreres.
+func (o *Orchestrator) SetEvaluator(p provider.Provider) {
+	if p != nil {
+		o.eval = p
+	}
 }
 
 func (o *Orchestrator) emit(msg string) {
@@ -86,7 +96,11 @@ func stripFence(s string) string {
 }
 
 func (o *Orchestrator) chat(ctx context.Context, system, user string) (string, error) {
-	resp, err := o.p.Chat(ctx, []provider.Message{
+	return chatWith(ctx, o.p, system, user)
+}
+
+func chatWith(ctx context.Context, p provider.Provider, system, user string) (string, error) {
+	resp, err := p.Chat(ctx, []provider.Message{
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
 	})
@@ -129,10 +143,12 @@ type scoreResult struct {
 }
 
 func (o *Orchestrator) score(ctx context.Context, spec string, t SubTask, output string) (int, string, error) {
-	const sys = `Du er en orchestrator der kvalitetssikrer en subagents løsning. Vurdér 0-100 på korrekthed, fuldstændighed og kvalitet ift. delopgaven og den overordnede spec. Returnér KUN valid JSON uden markdown:
-{"score": N, "critique": "konkret kritik / hvad mangler"}`
-	user := fmt.Sprintf("Overordnet spec:\n%s\n\nDelopgave: %s\n%s\n\nSubagentens løsning:\n%s", spec, t.Title, t.Brief, output)
-	raw, err := o.chat(ctx, sys, user)
+	// Skeptisk, uafhængig evaluator-rolle (kørt på o.eval — kan være en anden model)
+	// mod self-evaluation bias: modeller roser ellers konsekvent eget output.
+	const sys = `Du er en UAFHÆNGIG, SKEPTISK kvalitetssikrer — IKKE forfatteren af løsningen, og du må IKKE rose den. Antag at løsningen har mangler indtil det modsatte er bevist. Vurdér STRENGT 0-100 på korrekthed, fuldstændighed og kvalitet ift. delopgaven og den overordnede spec. Træk fra for alt der er udokumenteret, uafprøvet eller blot påstået uden at være vist. En løsning der "ser rigtig ud" men ikke beviseligt løser opgaven scorer under 60. Returnér KUN valid JSON uden markdown:
+{"score": N, "critique": "konkret, kritisk vurdering — hvad mangler og hvad er svagt"}`
+	user := fmt.Sprintf("Overordnet spec:\n%s\n\nDelopgave: %s\n%s\n\nSubagentens løsning (bedøm den skeptisk):\n%s", spec, t.Title, t.Brief, output)
+	raw, err := chatWith(ctx, o.eval, sys, user)
 	if err != nil {
 		return 0, "", err
 	}
