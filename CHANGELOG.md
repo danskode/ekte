@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/danskode/ekte/compare/v0.2.1...v0.3.0) (2026-06-20)
+
+
+### Features
+
+* redesign onboarding med logo, velkomst og to-faset flow ([bd6839e](https://github.com/danskode/ekte/commit/bd6839ee9a51f4eaea65c988edb1cd72b8a36b94))
+
+
+### Bug Fixes
+
+* installér til /usr/local/bin når skrivbar (virker straks i containere) ([ad16228](https://github.com/danskode/ekte/commit/ad1622801d1beb44f7d0467e16154489a3f6129b))
+* tydeligere install-hjælpetekst + root-gating af /usr/local/bin ([2a9f4b9](https://github.com/danskode/ekte/commit/2a9f4b917f8cfc90cefd90ad2d8be304475f3799))
+
 ## [0.2.1](https://github.com/danskode/ekte/compare/v0.2.0...v0.2.1) (2026-06-20)
 
 
