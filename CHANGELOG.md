@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/danskode/ekte/compare/v0.4.0...v0.5.0) (2026-06-21)
+
+
+### Features
+
+* onboarding-flow runde 3 — rækkefølge, granular fil-adgang, AIDD-velkomst ([87918cc](https://github.com/danskode/ekte/commit/87918cc18ae2549c5fd9b0c56237ff13cdb259e4))
+
 ## [0.4.0](https://github.com/danskode/ekte/compare/v0.3.0...v0.4.0) (2026-06-21)
 
 
