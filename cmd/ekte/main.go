@@ -86,6 +86,7 @@ func runTUI(sessionArg string, autoApprove bool, headlessGoal string) {
 	globalDir := globalEkteDir()
 
 	var welcomeName string
+	var onboardProfile *ekteProfile
 	isFirstRun := onboarding.IsFirstRun(cwd)
 	if isFirstRun {
 		result, err := onboarding.Run(cwd)
@@ -97,6 +98,10 @@ func runTUI(sessionArg string, autoApprove bool, headlessGoal string) {
 			os.Exit(0)
 		}
 		welcomeName = result.ProjectName
+		// Navne blev spurgt i onboardingen (Del 2) — brug dem, så vi ikke spørger igen.
+		if result.UserName != "" || result.AgentName != "" {
+			onboardProfile = &ekteProfile{UserName: result.UserName, AgentName: result.AgentName}
+		}
 	}
 
 	globalConfigPath := filepath.Join(globalDir, "config.yaml")
@@ -111,7 +116,11 @@ func runTUI(sessionArg string, autoApprove bool, headlessGoal string) {
 	cfg := provider.MergeConfigs(globalCfg, localCfg)
 
 	profile := loadProfile()
-	if profile.UserName == "" || profile.AgentName == "" {
+	if onboardProfile != nil {
+		// Navne kom fra onboardingen — gem dem uden at spørge igen.
+		profile = *onboardProfile
+		saveProfile(profile)
+	} else if profile.UserName == "" || profile.AgentName == "" {
 		profile = promptProfile()
 		saveProfile(profile)
 	}
@@ -372,17 +381,19 @@ func runTUI(sessionArg string, autoApprove bool, headlessGoal string) {
 		// Navngiven session ikke fundet: sig det højt — ellers ligner det bare
 		// en tom chat, og brugeren tror historikken er væk.
 		m.AddWarning(fmt.Sprintf("⚠  Session '%s' blev ikke fundet (søgt i %s og den globale mappe) — startede en ny session.", sessionArg, sessionDir))
-	} else if hint := recentSessionsHint(sessionDir); hint != "" {
-		m.AddInfo(hint)
 	}
 	// Uden fil-rettigheder får LLM'en slet ingen tools tilbudt — den svarer så
 	// bare "jeg kan ikke skrive til mappen" uden at brugeren kan se hvorfor.
 	if !whitelist.FileRead && !whitelist.FileWrite {
 		m.AddInfo("ℹ  Fil-tools er slået fra — modellen kan hverken læse eller skrive filer.\n" +
-			"   Aktivér med whitelist.file_read / file_write i .ekte/config.yaml")
+			"   Slå til i .ekte/config.yaml (whitelist.file_read / file_write) eller kør /init.\n" +
+			"   Guide: https://github.com/danskode/ekte#konfiguration")
 	}
 	if isFirstRun {
-		m.SetWelcome(welcomeName)
+		m.SetWelcome(welcomeName) // første besked efter install
+	} else if resumeSession == nil {
+		// Senere åbning (ikke en genoptaget session): kort velkommen-tilbage.
+		m.SetWelcomeBack(profile.UserName, recentSessionNames(sessionDir))
 	}
 
 	// MouseCellMotion gør det muligt at scrolle samtaleruden med musehjulet —
@@ -656,25 +667,20 @@ func setConfigProvider(configPath, prov, model, baseURL string) {
 	_ = os.WriteFile(configPath, data, 0600)
 }
 
-// recentSessionsHint viser navnene på de op til 3 seneste gemte sessioner,
-// så brugeren kan se hvordan man genoptager dem med 'ekte <navn>'.
-func recentSessionsHint(sessionDir string) string {
+// recentSessionNames returnerer navnene på de gemte sessioner (nyeste først),
+// brugt af velkommen-tilbage-beskeden til at vise hvordan man genoptager.
+func recentSessionNames(sessionDir string) []string {
 	sessions, err := session.LoadAll(sessionDir)
-	if err != nil || len(sessions) == 0 {
-		return ""
+	if err != nil {
+		return nil
 	}
 	var names []string
 	for _, s := range sessions {
-		if s.Name == "" {
-			continue
+		if s.Name != "" {
+			names = append(names, s.Name)
 		}
-		names = append(names, s.Name)
 	}
-	if len(names) == 0 {
-		return ""
-	}
-	return "💾 Seneste sessioner: " + strings.Join(names, " · ") +
-		"  —  skriv `ekte <navn>` for at fortsætte hvor du slap"
+	return names
 }
 
 func loadEkteMd(dir string) string {

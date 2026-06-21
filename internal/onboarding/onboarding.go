@@ -13,6 +13,8 @@ import (
 
 type Result struct {
 	ProjectName string
+	UserName    string
+	AgentName   string
 	Ok          bool
 }
 
@@ -123,15 +125,31 @@ func Run(dir string) (Result, error) {
 
 	fmt.Println()
 	step(2, 4, "Fil-adgang")
-	fmt.Println(aDim + "  Lader agenten faktisk læse og redigere kode i projektet — ellers kan ekte kun snakke." + aReset)
-	fmt.Println(aDim + "  Du har allerede bekræftet at du stoler på mappen." + aReset)
-	fileAccess := ask(r, "Må ekte læse og skrive filer i dette projekt? (anbefalet)")
-	if err := appendWhitelist(configPath, fileAccess); err != nil {
+	fmt.Println(aDim + "  Lader agenten faktisk arbejde med koden i projektet — ellers kan ekte kun snakke." + aReset)
+	fmt.Println(aDim + "  Du har allerede bekræftet at du stoler på mappen. Vælg niveau:" + aReset)
+	faChoice := promptChoice(r, "Hvilken fil-adgang skal ekte have?", []string{
+		"Læse og skrive (anbefalet)",
+		"Kun læse",
+		"Kun skrive",
+		"Ingen",
+	})
+	var faRead, faWrite bool
+	switch faChoice {
+	case "Kun læse":
+		faRead = true
+	case "Kun skrive":
+		faWrite = true
+	case "Ingen":
+		// begge false
+	default: // "Læse og skrive" + fritekst → anbefalet
+		faRead, faWrite = true, true
+	}
+	if err := appendWhitelist(configPath, faRead, faWrite); err != nil {
 		fmt.Printf("  ⚠ Kunne ikke gemme fil-adgang i config: %v\n", err)
-	} else if fileAccess {
-		fmt.Println(aAccent + "  ✓ Fil-adgang slået til." + aReset)
+	} else if faRead || faWrite {
+		fmt.Printf("%s  ✓ Fil-adgang: %s%s\n", aAccent, faChoice, aReset)
 	} else {
-		fmt.Println(aDim + "  Slået fra — ekte viser ved opstart hvordan du slår det til senere." + aReset)
+		fmt.Println(aDim + "  Ingen fil-adgang — ekte viser ved opstart hvordan du slår det til senere." + aReset)
 	}
 
 	skillsDir := filepath.Join(dir, ".ekte", "skills")
@@ -166,6 +184,21 @@ func Run(dir string) (Result, error) {
 	// ═══ Del 2 · Dit projekt ═══
 	phase("Del 2 · Dit projekt")
 
+	// Navne først — så "Alt klar" til sidst faktisk er det sidste, brugeren ser.
+	step(1, 2, "Navne")
+	fmt.Println(aDim + "  Hvad I kaldes i samtalen. Gemmes globalt og bruges på tværs af projekter." + aReset)
+	userName := prompt(r, "Hvad vil du kaldes? (Enter = Dig)")
+	if userName == "" {
+		userName = "Dig"
+	}
+	agentName := prompt(r, "Hvad skal din agent hedde? (Enter = Ekte)")
+	if agentName == "" {
+		agentName = "Ekte"
+	}
+	fmt.Printf("%s  ✓ %s & %s%s\n", aAccent, userName, agentName, aReset)
+
+	fmt.Println()
+	step(2, 2, "Projektkontekst")
 	var projectName string
 	ekteMdPath := filepath.Join(dir, "ekte.md")
 	if _, err := os.Stat(ekteMdPath); os.IsNotExist(err) {
@@ -187,7 +220,7 @@ func Run(dir string) (Result, error) {
 	fmt.Println()
 	fmt.Print("Tryk Enter for at starte ekte...")
 	readLine(r)
-	return Result{Ok: true, ProjectName: projectName}, nil
+	return Result{Ok: true, ProjectName: projectName, UserName: userName, AgentName: agentName}, nil
 }
 
 // gitignoreEntries er de .ekte-stier der aldrig bør committes i et
@@ -530,19 +563,16 @@ func appendWikiConfig(configPath, wikiPath string) {
 }
 
 // appendWhitelist skriver fil-adgangs-whitelisten ud fra brugerens valg i fil-adgang-trinnet.
-// KUN file_read/file_write — hook_run (kommando-kørsel via /hook) sættes bevidst IKKE her, da
-// brugeren kun samtykker til fil-læsning/-skrivning; hooks aktiveres separat når de tilføjes med
-// /hook. Returnerer fejl, så onboardingens viste status matcher den faktisk persisterede config.
-func appendWhitelist(configPath string, enabled bool) error {
-	val := "false"
-	if enabled {
-		val = "true"
-	}
+// read/write sættes separat (granulært). KUN file_read/file_write — hook_run (kommando-kørsel
+// via /hook) sættes bevidst IKKE her, da brugeren kun samtykker til fil-læsning/-skrivning;
+// hooks aktiveres separat når de tilføjes med /hook. Returnerer fejl, så onboardingens viste
+// status matcher den faktisk persisterede config.
+func appendWhitelist(configPath string, read, write bool) error {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return err
 	}
-	content := string(data) + fmt.Sprintf("\nwhitelist:\n  file_read: %s\n  file_write: %s\n", val, val)
+	content := string(data) + fmt.Sprintf("\nwhitelist:\n  file_read: %t\n  file_write: %t\n", read, write)
 	return os.WriteFile(configPath, []byte(content), 0600)
 }
 

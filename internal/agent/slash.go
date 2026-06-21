@@ -38,18 +38,33 @@ func (a *Agent) handleSlash(ctx context.Context, input string) []Event {
 		return []Event{{Type: EventSystem, Content: a.helpText()}}
 
 	case "/clear":
+		// Gem den nuværende session FØR vi nulstiller, så "start forfra" ikke taber
+		// en igangværende samtale (en sikker "ny session uden /exit"). Gemmes kun hvis
+		// der faktisk er samtale ud over baseline.
+		savedNote := ""
+		if a.cfg.SessionDir != "" && len(a.messages) > len(a.baseline) {
+			if s, err := session.Save(a.cfg.SessionDir, a.messages, a.sessionName); err == nil {
+				savedNote = fmt.Sprintf("✓ Gemte forrige session: %s — fortsæt den med 'ekte %s'. Startede en frisk.", s.Title, s.Name)
+			}
+		}
 		// Gendan baseline i stedet for at nulstille alt — ellers fortsætter
 		// samtalen uden systemprompt, hukommelse og hook-viden.
 		a.messages = append([]provider.Message(nil), a.baseline...)
 		a.planMode = false
 		a.planFile = ""
+		a.sessionName = "" // frisk session får sit eget navn ved næste gem
 		a.tokenCount = estimateTokens(a.messages)
 		// EventTokenCount FØR den tomme EventSystem — TUI'en stopper
-		// stream-læsningen når den ser clear-signalet.
-		return []Event{
+		// stream-læsningen når den ser clear-signalet. Gem-noten kommer EFTER
+		// det tomme signal, da signalet rydder beskedruden.
+		events := []Event{
 			{Type: EventTokenCount, Tokens: a.tokenCount},
 			{Type: EventSystem, Content: ""},
 		}
+		if savedNote != "" {
+			events = append(events, Event{Type: EventSystem, Content: savedNote})
+		}
+		return events
 
 	case "/skills":
 		return a.handleSkills(arg)

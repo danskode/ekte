@@ -243,19 +243,46 @@ func (m *Model) ShowBanner() {
 	m.bannerContent = sb.String()
 }
 
+// SetWelcome er agentens første besked EFTER install (første kørsel). AIDD-framet:
+// vi afdækker intentionen sammen. Tilbyder nummererede quick-starts + fri start.
 func (m *Model) SetWelcome(projectName string) {
 	name := projectName
 	if name == "" {
 		name = "dit projekt"
 	}
 	welcome := fmt.Sprintf(
-		"Hej! Du er nu klar til at spec'e %s.\n\n"+
-			"Vil du spec'e din første funktion, eller vil du først tilføje noget viden "+
-			"til din wiki, som vi kan bruge til at bygge efter?\n\n"+
-			"Du kan også se dine muligheder med /hjælp",
+		"Velkommen ombord! Jeg er din ekte-agent, og vi arbejder efter AIDD: vi afdækker "+
+			"din *intention* sammen, så vi bygger %s i samme retning — i stedet for at jeg gætter.\n\n"+
+			"Vil du vide hvordan systemet virker, så skriv et tal — ellers gå bare i gang:\n\n"+
+			"  1  Giv mig flere værktøjer (hooks) — hvor sættes de op?\n"+
+			"  2  Hent nye skills fra biblioteket\n"+
+			"  3  Kom i gang med wikien der allerede er sat op\n"+
+			"  4  Jeg kender ekte — lad os bare starte\n\n"+
+			"…eller skriv direkte hvad du vil bygge i dag, så kvalificerer vi det med /plan.\n"+
+			"(Alle kommandoer: /hjælp)",
 		name,
 	)
 	m.messages = append(m.messages, provider.Message{Role: "assistant", Content: welcome})
+}
+
+// SetWelcomeBack er agentens besked ved senere åbninger (ikke første kørsel).
+// Kort genkendelse + hvordan man genoptager/starter forfra + AIDD-invitation.
+func (m *Model) SetWelcomeBack(userName string, recent []string) {
+	who := userName
+	if who == "" {
+		who = "igen"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Velkommen tilbage, %s!\n\n", who)
+	if len(recent) > 0 {
+		fmt.Fprintf(&b, "Fortsæt hvor du slap: /resume (vis liste) eller `ekte %s` ved opstart.\n", recent[0])
+	} else {
+		b.WriteString("Genoptag en tidligere session med /resume.\n")
+	}
+	b.WriteString("Start forfra når som helst med /clear (den nuværende session gemmes først).\n\n")
+	b.WriteString("Ellers — skriv hvad vi skal arbejde på i dag, så sørger jeg for at vi får " +
+		"afdækket din intention (AIDD), så vi arbejder i samme retning.")
+	m.messages = append(m.messages, provider.Message{Role: "assistant", Content: b.String()})
 }
 
 func (m Model) toolPanelWidth() int {
