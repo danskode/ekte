@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/danskode/ekte/compare/v0.3.0...v0.4.0) (2026-06-21)
+
+
+### Features
+
+* onboarding-UX — lilla logo, ([3745d31](https://github.com/danskode/ekte/commit/3745d311df22e801bed24bb7dfdb377086318b7a))
+
 ## [0.3.0](https://github.com/danskode/ekte/compare/v0.2.1...v0.3.0) (2026-06-20)
 
 
